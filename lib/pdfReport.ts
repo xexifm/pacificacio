@@ -1,8 +1,11 @@
-import jsPDF from 'jspdf';
-import html2canvas from 'html2canvas';
+import type jsPDF from 'jspdf';
 import { format } from 'date-fns';
 import { ca } from 'date-fns/locale';
 import type { RefObject } from 'react';
+
+// jsPDF and html2canvas are heavy (~1 MB combined). They are dynamically imported
+// inside generateAnalyticsReport so they are only fetched when the user actually
+// generates a report, keeping them out of the initial page bundle.
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -61,7 +64,10 @@ export interface PDFReportInput {
 
 // ─── Brand constants ──────────────────────────────────────────────────────────
 
-const NAVY: RGB = [0, 51, 102];
+// Institutional colour of the Ajuntament de Cornellà de Llobregat (escut red).
+// Used for all report chrome (section headers, cover rules, footer strip).
+const CORPORATE: RGB = [166, 26, 47];
+const NAVY: RGB = CORPORATE; // kept as the accent name used throughout the report
 const BLUE: RGB = [59, 130, 246];
 const GREEN: RGB = [34, 197, 94];
 const RED: RGB = [239, 68, 68];
@@ -220,7 +226,10 @@ export async function generateAnalyticsReport(input: PDFReportInput): Promise<vo
     chartRef, attribution, cornellaLogoSrc, bollardImageSrc,
   } = input;
 
-  const pdf = new jsPDF('p', 'mm', 'a4', true);
+  // Lazy-load the heavy PDF libraries only when a report is generated.
+  const { default: JsPDF } = await import('jspdf');
+
+  const pdf = new JsPDF('p', 'mm', 'a4', true);
   const W = 210;
   const H = 297;
   const M = 15;
@@ -808,6 +817,7 @@ export async function generateAnalyticsReport(input: PDFReportInput): Promise<vo
 
   if (chartRef.current && chartData.length > 0) {
     try {
+      const { default: html2canvas } = await import('html2canvas');
       const canvas = await html2canvas(chartRef.current, {
         scale: 1.5, backgroundColor: '#ffffff', logging: false,
       });

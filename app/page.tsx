@@ -6,9 +6,16 @@ import { type TrafficData, type CameraSettings } from '@/lib/types';
 import { getTrafficData, getCameraSettings, getBollardSettings } from '@/lib/dataStore';
 import { asset } from '@/lib/paths';
 import { NEIGHBOURHOODS } from '@/lib/neighbourhoods';
-import { getDayType } from '@/lib/holidays';
+import {
+  type DayCategory,
+  DAY_CATEGORY_COLORS,
+  normalizeToDateOnly,
+  getUTCDateKey,
+  getDayCategory,
+} from '@/lib/analytics';
 import { VEHICLE_TYPES } from '@/lib/vehicleTypes';
 import { Card } from '@/components/ui/card';
+import { Skeleton } from '@/components/ui/skeleton';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -22,10 +29,11 @@ import { format, startOfYear, endOfYear } from 'date-fns';
 import { ca } from 'date-fns/locale';
 import type { DateRange } from 'react-day-picker';
 import DataCoverageTable from '@/components/DataCoverageTable';
+import TrafficHeatmap from '@/components/TrafficHeatmap';
 import { ATTRIBUTION } from '@/lib/attribution';
-import { generateAnalyticsReport } from '@/lib/pdfReport';
+import { buildFilterQuery, parseFilterQuery } from '@/lib/urlFilters';
 
-const cornellaLogo = asset('/assets/cornella_logo.png');
+const cornellaLogo = asset('/assets/escut-cornella.svg');
 const bollardImage = asset('/assets/bollard.jpg');
 
 const UNRELIABLE_CAMERAS = new Set([
@@ -34,61 +42,10 @@ const UNRELIABLE_CAMERAS = new Set([
 const UNRELIABLE_CAMERA_MSG =
   "Les dades d'aquesta càmera no són fiables i no haurien d'usar-se per a estudis de mobilitat o anàlisis similars.";
 
-interface BollardSettings {
+type BollardSettings = {
   bollardStartDatePedro: string | null;
   bollardStartDateGavarra: string | null;
-}
-
-type DayCategory = 'working' | 'holiday_down' | 'holiday_up';
-
-const DAY_CATEGORY_COLORS = {
-  working: '#3b82f6',
-  holiday_down: '#22c55e', 
-  holiday_up: '#ef4444',
 };
-
-
-function normalizeToDateOnly(date: Date): Date {
-  const year = date.getUTCFullYear();
-  const month = date.getUTCMonth();
-  const day = date.getUTCDate();
-  return new Date(Date.UTC(year, month, day, 12, 0, 0, 0));
-}
-
-function getUTCDateKey(date: Date): string {
-  const year = date.getUTCFullYear();
-  const month = String(date.getUTCMonth() + 1).padStart(2, '0');
-  const day = String(date.getUTCDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
-}
-
-function getDayCategory(
-  date: Date,
-  neighbourhood: string | undefined,
-  bollardSettings: BollardSettings | undefined
-): DayCategory {
-  const normalizedDate = normalizeToDateOnly(date);
-  const dayType = getDayType(normalizedDate);
-  
-  if (dayType === 'working') {
-    return 'working';
-  }
-  
-  const dateStr = getUTCDateKey(normalizedDate);
-  
-  let bollardStartDate: string | null = null;
-  if (neighbourhood === 'Pedró') {
-    bollardStartDate = bollardSettings?.bollardStartDatePedro || null;
-  } else if (neighbourhood === 'Gavarra') {
-    bollardStartDate = bollardSettings?.bollardStartDateGavarra || null;
-  }
-  
-  if (!bollardStartDate) {
-    return 'holiday_down';
-  }
-  
-  return dateStr >= bollardStartDate ? 'holiday_up' : 'holiday_down';
-}
 
 export default function Analytics() {
   const [selectedNeighbourhood, setSelectedNeighbourhood] = useState<string>('all');
@@ -100,7 +57,33 @@ export default function Analytics() {
   const [isGeneratingPDF, setIsGeneratingPDF] = useState(false);
   const [calendarOpen, setCalendarOpen] = useState(false);
   const [pendingRange, setPendingRange] = useState<DateRange | undefined>(undefined);
+  const [filtersHydrated, setFiltersHydrated] = useState(false);
   const chartRef = useRef<HTMLDivElement>(null);
+
+  // Initialise filter state from the URL once, on mount (client only, so it does
+  // not cause a hydration mismatch with the static server render).
+  useEffect(() => {
+    const parsed = parseFilterQuery(window.location.search);
+    if (parsed.neighbourhood) setSelectedNeighbourhood(parsed.neighbourhood);
+    if (parsed.deviceType) setSelectedDeviceType(parsed.deviceType);
+    if (parsed.cameras) setSelectedCameras(parsed.cameras);
+    if (parsed.vehicles) setSelectedVehicleTypes(parsed.vehicles);
+    if (parsed.dateRange) setDateRange(parsed.dateRange);
+    setFiltersHydrated(true);
+  }, []);
+
+  // Reflect the active filters back into the URL so the view is shareable.
+  useEffect(() => {
+    if (!filtersHydrated) return;
+    const query = buildFilterQuery({
+      neighbourhood: selectedNeighbourhood,
+      deviceType: selectedDeviceType,
+      cameras: selectedCameras,
+      vehicles: selectedVehicleTypes,
+      dateRange,
+    });
+    window.history.replaceState(null, '', `${window.location.pathname}${query}`);
+  }, [filtersHydrated, selectedNeighbourhood, selectedDeviceType, selectedCameras, selectedVehicleTypes, dateRange]);
 
   const { data: trafficData = [], isLoading } = useQuery<TrafficData[]>({
     queryKey: ['traffic-data'],
@@ -563,6 +546,8 @@ export default function Analytics() {
     if (filteredData.length === 0) return;
     setIsGeneratingPDF(true);
     try {
+      // Load the report generator (and its heavy jsPDF/html2canvas deps) on demand.
+      const { generateAnalyticsReport } = await import('@/lib/pdfReport');
       await generateAnalyticsReport({
         filteredData,
         chartData,
@@ -593,10 +578,19 @@ export default function Analytics() {
 
   if (isLoading) {
     return (
-      <div className="min-h-screen bg-background flex items-center justify-center">
-        <div className="text-center py-8">
-          <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
-          <p className="mt-4 text-sm text-muted-foreground">Carregant dades...</p>
+      <div className="min-h-screen bg-background">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-4">
+          <div className="flex items-center justify-between">
+            <Skeleton className="h-8 w-56" />
+            <Skeleton className="h-9 w-44" />
+          </div>
+          <Skeleton className="h-28 w-full" />
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <Skeleton className="h-56 w-full" />
+            <Skeleton className="h-56 w-full" />
+          </div>
+          <Skeleton className="h-72 w-full" />
+          <p className="text-center text-sm text-muted-foreground pt-2">Carregant dades…</p>
         </div>
       </div>
     );
@@ -1075,7 +1069,9 @@ export default function Analytics() {
             </div>
           </Card>
 
-          <DataCoverageTable 
+          <TrafficHeatmap data={chartData} />
+
+          <DataCoverageTable
             selectedVehicleTypes={selectedVehicleTypes}
             selectedNeighbourhood={selectedNeighbourhood}
             selectedCameras={selectedCameras}

@@ -6,9 +6,9 @@ import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
-import { format, isWeekend, getDay } from 'date-fns';
+import { format } from 'date-fns';
 import { ca } from 'date-fns/locale';
-import { isHoliday } from '@/lib/holidays';
+import { DAY_CATEGORY_COLORS, getDayCategory } from '@/lib/analytics';
 import { getDetailedDataCoverage, getBollardSettings, getCameraSettings } from '@/lib/dataStore';
 import { ChevronDown, ChevronUp } from 'lucide-react';
 
@@ -40,49 +40,6 @@ interface DataCoverageTableProps {
   selectedCameras?: string[];
   dateRange?: DateRange;
   cameraToNeighbourhood?: Record<string, string>;
-}
-
-type DayCategory = 'working' | 'holiday_down' | 'holiday_up';
-
-const DAY_CATEGORY_COLORS: Record<DayCategory, string> = {
-  working: '#3b82f6',
-  holiday_down: '#22c55e',
-  holiday_up: '#ef4444',
-};
-
-function normalizeToDateOnly(date: Date): Date {
-  const year = date.getUTCFullYear();
-  const month = date.getUTCMonth();
-  const day = date.getUTCDate();
-  return new Date(Date.UTC(year, month, day, 12, 0, 0, 0));
-}
-
-function getDayCategory(date: Date, neighbourhood: string | undefined, bollardSettings: BollardSettings | undefined): DayCategory {
-  const normalizedDate = normalizeToDateOnly(date);
-  const dayOfWeek = getDay(normalizedDate);
-  const isWeekendDay = isWeekend(normalizedDate);
-  const isHolidayDay = isHoliday(normalizedDate);
-
-  if (!isWeekendDay && !isHolidayDay) {
-    return 'working';
-  }
-
-  if (!bollardSettings || !neighbourhood) {
-    return 'holiday_down';
-  }
-
-  const bollardStartDate = neighbourhood === 'Pedró' 
-    ? bollardSettings.bollardStartDatePedro 
-    : neighbourhood === 'Gavarra' 
-      ? bollardSettings.bollardStartDateGavarra 
-      : null;
-
-  if (!bollardStartDate) {
-    return 'holiday_down';
-  }
-
-  const dateStr = format(normalizedDate, 'yyyy-MM-dd');
-  return dateStr >= bollardStartDate ? 'holiday_up' : 'holiday_down';
 }
 
 export default function DataCoverageTable({ 

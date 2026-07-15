@@ -7,7 +7,9 @@
 // This module is deliberately the ONLY place that knows where data comes from, so
 // when the real data source is defined later, only the loaders below change.
 
+import { z } from "zod";
 import { asset } from "@/lib/paths";
+import { computeDetailedCoverage } from "@/lib/analytics";
 import type {
   TrafficData,
   CameraSettings,
@@ -15,37 +17,60 @@ import type {
   DataCoverageDetail,
 } from "@/lib/types";
 
-interface RawTraffic {
-  meta: {
-    generatedAt: string;
-    granularity: string;
-    rowCount: number;
-    dateFrom: string | null;
-    dateTo: string | null;
-    cameras: string[];
-  };
-  columns: string[];
-  rows: [string, string, string, number][]; // [camera, date, tipusVehicle, valor]
-}
+// ── Runtime validation of the committed JSON ────────────────────────────────
+// Catches a malformed/corrupt data file early with a clear message instead of
+// letting undefined values propagate into the charts.
 
-interface RawSettings {
-  cameras: CameraSettings[];
-  bollard: BollardSettings;
-}
+const rawTrafficSchema = z.object({
+  meta: z.object({
+    generatedAt: z.string(),
+    granularity: z.string(),
+    rowCount: z.number(),
+    dateFrom: z.string().nullable(),
+    dateTo: z.string().nullable(),
+    cameras: z.array(z.string()),
+  }),
+  columns: z.array(z.string()),
+  rows: z.array(z.tuple([z.string(), z.string(), z.string(), z.number()])),
+});
+
+const rawSettingsSchema = z.object({
+  cameras: z.array(
+    z.object({
+      cameraId: z.string(),
+      displayName: z.string().nullable(),
+      neighbourhood: z.string(),
+      cameraType: z.string(),
+    }),
+  ),
+  bollard: z.object({
+    bollardStartDatePedro: z.string().nullable(),
+    bollardStartDateGavarra: z.string().nullable(),
+  }),
+});
+
+type RawSettings = z.infer<typeof rawSettingsSchema>;
 
 // Memoised fetches so multiple useQuery hooks share one network round-trip.
 let trafficPromise: Promise<TrafficData[]> | null = null;
 let settingsPromise: Promise<RawSettings> | null = null;
 
-async function fetchJson<T>(path: string): Promise<T> {
+async function fetchJson(path: string): Promise<unknown> {
   const res = await fetch(asset(path), { cache: "force-cache" });
   if (!res.ok) throw new Error(`No s'ha pogut carregar ${path}: ${res.status}`);
-  return (await res.json()) as T;
+  return res.json();
 }
 
 async function loadSettings(): Promise<RawSettings> {
   if (!settingsPromise) {
-    settingsPromise = fetchJson<RawSettings>("/data/settings.json");
+    settingsPromise = (async () => {
+      const json = await fetchJson("/data/settings.json");
+      const parsed = rawSettingsSchema.safeParse(json);
+      if (!parsed.success) {
+        throw new Error(`settings.json invàlid: ${parsed.error.message}`);
+      }
+      return parsed.data;
+    })();
   }
   return settingsPromise;
 }
@@ -53,16 +78,21 @@ async function loadSettings(): Promise<RawSettings> {
 async function loadTraffic(): Promise<TrafficData[]> {
   if (!trafficPromise) {
     trafficPromise = (async () => {
-      const [raw, settings] = await Promise.all([
-        fetchJson<RawTraffic>("/data/traffic-daily.json"),
+      const [json, settings] = await Promise.all([
+        fetchJson("/data/traffic-daily.json"),
         loadSettings(),
       ]);
+      const parsed = rawTrafficSchema.safeParse(json);
+      if (!parsed.success) {
+        throw new Error(`traffic-daily.json invàlid: ${parsed.error.message}`);
+      }
+
       const neighbourhoodByCamera: Record<string, string> = {};
       settings.cameras.forEach((c) => {
         neighbourhoodByCamera[c.cameraId] = c.neighbourhood;
       });
 
-      return raw.rows.map(([camera, date, tipusVehicle, valor]) => ({
+      return parsed.data.rows.map(([camera, date, tipusVehicle, valor]) => ({
         id: `${camera}|${date}|${tipusVehicle}`,
         camera,
         datahora: `${date} 00:00`,
@@ -94,20 +124,5 @@ export async function getBollardSettings(): Promise<BollardSettings> {
 // (camera, date) with the per-vehicle-type breakdown and daily total.
 export async function getDetailedDataCoverage(): Promise<DataCoverageDetail[]> {
   const rows = await loadTraffic();
-  const byKey = new Map<string, DataCoverageDetail>();
-
-  for (const row of rows) {
-    const date = row.datahora.slice(0, 10);
-    const key = `${row.camera}-${date}`;
-    let entry = byKey.get(key);
-    if (!entry) {
-      entry = { camera: row.camera, date, totalVehicles: 0, vehicleBreakdown: {} };
-      byKey.set(key, entry);
-    }
-    entry.totalVehicles += row.valor;
-    entry.vehicleBreakdown[row.tipusVehicle] =
-      (entry.vehicleBreakdown[row.tipusVehicle] || 0) + row.valor;
-  }
-
-  return Array.from(byKey.values());
+  return computeDetailedCoverage(rows);
 }
