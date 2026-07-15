@@ -96,6 +96,26 @@ La configuració (barris, tipus de dispositiu, dates de pilones) s'edita a la p�
 | `npm run typecheck` | Comprovació de tipus (tsc) |
 | `npm run seed` | Regenera les dades des del CSV per defecte |
 
+## Anàlisi d'impacte
+
+El panell principal («Impacte de les mesures de pacificació») respon si les
+mesures han canviat la circulació, comparant el trànsit **abans/després** de la
+data d'activació de cada barri. La lògica és a `lib/impact.ts` (`computeImpact`):
+compara dies equivalents (laborables↔laborables, festius↔festius), fa la mitjana
+de vehicles **per dia i càmera** (per neutralitzar diferències de cobertura) i
+només inclou càmeres amb prou dies a banda i banda i marcades com a **fiables**.
+
+Dos informes PDF (botons a la capçalera):
+
+- **Informe executiu** (`lib/pdfExecutive.ts`) — curt (~7-12 pàg.), per a
+  presentació: resum, conclusions automàtiques, impacte per barri i per càmera,
+  evolució mensual amb línies d'activació, i metodologia + cobertura.
+- **Informe detallat** (`lib/pdfReport.ts`) — l'informe complet amb l'annex de
+  cobertura dia a dia.
+
+La **fiabilitat** de cada càmera i les **dates d'activació** s'editen a la pàgina
+*Configuració* (es descarrega `settings.json` per fer-hi commit).
+
 ## Notes
 
 - **Càmeres**: CT10–CT23, assignades a barris (Pedró / Gavarra) i tipus de

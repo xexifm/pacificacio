@@ -20,25 +20,44 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from 'recharts';
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell, ReferenceLine } from 'recharts';
 import { Calendar } from '@/components/ui/calendar';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
-import { CalendarIcon, BarChart3, ChevronDown, ChevronRight, Download, Loader2, AlertTriangle } from 'lucide-react';
+import { CalendarIcon, BarChart3, ChevronDown, ChevronRight, Download, Loader2, AlertTriangle, FileText } from 'lucide-react';
 import { Tooltip as UITooltip, TooltipContent as UITooltipContent, TooltipTrigger as UITooltipTrigger } from '@/components/ui/tooltip';
 import { format, startOfYear, endOfYear } from 'date-fns';
 import { ca } from 'date-fns/locale';
 import type { DateRange } from 'react-day-picker';
 import DataCoverageTable from '@/components/DataCoverageTable';
 import TrafficHeatmap from '@/components/TrafficHeatmap';
+import ImpactPanel from '@/components/ImpactPanel';
 import { ATTRIBUTION } from '@/lib/attribution';
 import { buildFilterQuery, parseFilterQuery } from '@/lib/urlFilters';
 
 const cornellaLogo = asset('/assets/escut-cornella.svg');
 const bollardImage = asset('/assets/bollard.jpg');
 
-const UNRELIABLE_CAMERAS = new Set([
-  'CT13', 'CT15', 'CT16', 'CT17', 'CT21', 'CT22', 'CT23',
-]);
+type Granularity = 'day' | 'week' | 'month';
+const AGG_FILL = '#3b82f6';
+
+function mondayOf(dateISO: string): string {
+  const d = new Date(`${dateISO}T12:00:00.000Z`);
+  const diff = (d.getUTCDay() + 6) % 7; // 0 for Monday
+  d.setUTCDate(d.getUTCDate() - diff);
+  return d.toISOString().slice(0, 10);
+}
+
+function bucketKey(dateISO: string, g: Granularity): string {
+  if (g === 'day') return dateISO;
+  if (g === 'week') return mondayOf(dateISO);
+  return dateISO.slice(0, 7); // month
+}
+
+function bucketLabel(key: string, g: Granularity): string {
+  if (g === 'month') return format(new Date(`${key}-01T12:00:00.000Z`), 'MMM yyyy', { locale: ca });
+  return format(new Date(`${key}T12:00:00.000Z`), 'dd MMM yy', { locale: ca });
+}
+
 const UNRELIABLE_CAMERA_MSG =
   "Les dades d'aquesta càmera no són fiables i no haurien d'usar-se per a estudis de mobilitat o anàlisis similars.";
 
@@ -55,6 +74,8 @@ export default function Analytics() {
   const [selectedDeviceType, setSelectedDeviceType] = useState<string>('all');
   const [vehicleBreakdownOpen, setVehicleBreakdownOpen] = useState<Record<string, boolean>>({});
   const [isGeneratingPDF, setIsGeneratingPDF] = useState(false);
+  const [isGeneratingExec, setIsGeneratingExec] = useState(false);
+  const [chartGranularity, setChartGranularity] = useState<Granularity>('month');
   const [calendarOpen, setCalendarOpen] = useState(false);
   const [pendingRange, setPendingRange] = useState<DateRange | undefined>(undefined);
   const [filtersHydrated, setFiltersHydrated] = useState(false);
@@ -114,6 +135,10 @@ export default function Analytics() {
       mapping[s.cameraId] = s.cameraType || 'Càmera';
     });
     return mapping;
+  }, [cameraSettings]);
+
+  const unreliableCameras = useMemo(() => {
+    return new Set(cameraSettings.filter(s => s.reliable === false).map(s => s.cameraId));
   }, [cameraSettings]);
 
   const data = useMemo(() => {
@@ -247,6 +272,37 @@ export default function Analytics() {
       })
       .sort((a, b) => a.date.localeCompare(b.date));
   }, [filteredData, bollardSettings, selectedNeighbourhood]);
+
+  // Chart data bucketed by the selected granularity (daily bars over 2 years are
+  // illegible; monthly is the default for presentation). Day mode keeps day-type
+  // colours; week/month aggregate into a single neutral colour.
+  const displayChartData = useMemo(() => {
+    if (chartGranularity === 'day') {
+      return chartData.map(d => ({ key: d.date, total: d.total, displayDate: d.displayDate, fill: d.fill }));
+    }
+    const buckets = new Map<string, number>();
+    chartData.forEach(d => {
+      const k = bucketKey(d.date, chartGranularity);
+      buckets.set(k, (buckets.get(k) || 0) + d.total);
+    });
+    return Array.from(buckets.entries())
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .map(([k, total]) => ({ key: k, total, displayDate: bucketLabel(k, chartGranularity), fill: AGG_FILL }));
+  }, [chartData, chartGranularity]);
+
+  // X positions (bucket labels) where the activation ReferenceLines should sit.
+  const activationMarkers = useMemo(() => {
+    const markers: { x: string; label: string }[] = [];
+    const add = (dateStr: string | null | undefined, label: string) => {
+      if (!dateStr) return;
+      const k = bucketKey(dateStr, chartGranularity);
+      const bucket = displayChartData.find(d => d.key === k);
+      if (bucket) markers.push({ x: bucket.displayDate, label });
+    };
+    add(bollardSettings?.bollardStartDatePedro, 'Pedró');
+    add(bollardSettings?.bollardStartDateGavarra, 'Gavarra');
+    return markers;
+  }, [displayChartData, bollardSettings, chartGranularity]);
 
   const neighbourhoodAverages = useMemo(() => {
     // When multiple cameras are selected, we calculate per-camera averages first,
@@ -542,6 +598,25 @@ export default function Analytics() {
     );
   };
 
+  const generateExecutivePDF = useCallback(async () => {
+    setIsGeneratingExec(true);
+    try {
+      // Executive report is independent of the active filters (headline figures).
+      const { generateExecutiveReport } = await import('@/lib/pdfExecutive');
+      await generateExecutiveReport({
+        trafficData,
+        cameraSettings,
+        bollardSettings,
+        attribution: ATTRIBUTION,
+        escutSrc: cornellaLogo,
+      });
+    } catch (error) {
+      console.error('Error generating executive PDF:', error);
+    } finally {
+      setIsGeneratingExec(false);
+    }
+  }, [trafficData, cameraSettings, bollardSettings]);
+
   const generatePDF = useCallback(async () => {
     if (filteredData.length === 0) return;
     setIsGeneratingPDF(true);
@@ -619,20 +694,39 @@ export default function Analytics() {
           <h1 className="text-2xl font-semibold text-foreground">
             Analítiques de Trànsit
           </h1>
-          <Button
-            onClick={generatePDF}
-            disabled={filteredData.length === 0 || isGeneratingPDF}
-            data-testid="button-download-pdf"
-          >
-            {isGeneratingPDF ? (
-              <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Generant PDF...</>
-            ) : (
-              <><Download className="w-4 h-4 mr-2" />Descarrega informe PDF</>
-            )}
-          </Button>
+          <div className="flex flex-wrap gap-2">
+            <Button
+              onClick={generateExecutivePDF}
+              disabled={isGeneratingExec}
+              data-testid="button-download-executive"
+            >
+              {isGeneratingExec ? (
+                <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Generant...</>
+              ) : (
+                <><FileText className="w-4 h-4 mr-2" />Informe executiu</>
+              )}
+            </Button>
+            <Button
+              variant="outline"
+              onClick={generatePDF}
+              disabled={filteredData.length === 0 || isGeneratingPDF}
+              data-testid="button-download-pdf"
+            >
+              {isGeneratingPDF ? (
+                <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Generant...</>
+              ) : (
+                <><Download className="w-4 h-4 mr-2" />Informe detallat</>
+              )}
+            </Button>
+          </div>
         </header>
 
         <div className="space-y-4">
+          <ImpactPanel
+            trafficData={trafficData}
+            cameraSettings={cameraSettings}
+            bollardSettings={bollardSettings}
+          />
           <Card className="p-4">
             <h3 className="text-sm font-semibold text-foreground mb-3">Filtres</h3>
             
@@ -691,7 +785,7 @@ export default function Analytics() {
                       <div className="font-medium text-sm">Selecciona càmeres</div>
                       <div className="grid grid-cols-2 gap-2 max-h-64 overflow-y-auto">
                         {availableCameras.map(camera => {
-                          const unreliable = UNRELIABLE_CAMERAS.has(camera);
+                          const unreliable = unreliableCameras.has(camera);
                           return (
                             <div key={camera} className="flex items-center space-x-2">
                               <Checkbox
@@ -970,21 +1064,40 @@ export default function Analytics() {
               <h3 className="text-base font-semibold text-foreground">
                 Total de Vehicles per Data
               </h3>
-              <div className="flex items-center gap-4">
-                <div className="flex gap-3 text-xs flex-wrap">
-                  <div className="flex items-center gap-1">
-                    <div className="w-3 h-3 rounded" style={{ backgroundColor: DAY_CATEGORY_COLORS.working }}></div>
-                    <span className="text-muted-foreground">Laborables</span>
-                  </div>
-                  <div className="flex items-center gap-1">
-                    <div className="w-3 h-3 rounded" style={{ backgroundColor: DAY_CATEGORY_COLORS.holiday_down }}></div>
-                    <span className="text-muted-foreground">Festius baixats</span>
-                  </div>
-                  <div className="flex items-center gap-1">
-                    <div className="w-3 h-3 rounded" style={{ backgroundColor: DAY_CATEGORY_COLORS.holiday_up }}></div>
-                    <span className="text-muted-foreground">Festius aixecats</span>
-                  </div>
+              <div className="flex items-center gap-4 flex-wrap">
+                <div className="inline-flex rounded-md border border-border overflow-hidden" data-testid="granularity-toggle">
+                  {(['day', 'week', 'month'] as Granularity[]).map(g => (
+                    <button
+                      key={g}
+                      type="button"
+                      onClick={() => setChartGranularity(g)}
+                      className={`px-2.5 py-1 text-xs font-medium transition-colors ${
+                        chartGranularity === g
+                          ? 'bg-primary text-primary-foreground'
+                          : 'text-muted-foreground hover:text-foreground'
+                      }`}
+                      data-testid={`granularity-${g}`}
+                    >
+                      {g === 'day' ? 'Dia' : g === 'week' ? 'Setmana' : 'Mes'}
+                    </button>
+                  ))}
                 </div>
+                {chartGranularity === 'day' && (
+                  <div className="flex gap-3 text-xs flex-wrap">
+                    <div className="flex items-center gap-1">
+                      <div className="w-3 h-3 rounded" style={{ backgroundColor: DAY_CATEGORY_COLORS.working }}></div>
+                      <span className="text-muted-foreground">Laborables</span>
+                    </div>
+                    <div className="flex items-center gap-1">
+                      <div className="w-3 h-3 rounded" style={{ backgroundColor: DAY_CATEGORY_COLORS.holiday_down }}></div>
+                      <span className="text-muted-foreground">Festius baixats</span>
+                    </div>
+                    <div className="flex items-center gap-1">
+                      <div className="w-3 h-3 rounded" style={{ backgroundColor: DAY_CATEGORY_COLORS.holiday_up }}></div>
+                      <span className="text-muted-foreground">Festius aixecats</span>
+                    </div>
+                  </div>
+                )}
                 <div className="text-right">
                   <span className="text-xs text-muted-foreground mr-2">Total:</span>
                   <span className="text-lg font-bold text-primary" data-testid="text-total-vehicles">
@@ -994,13 +1107,13 @@ export default function Analytics() {
               </div>
             </div>
 
-            {chartData.length > 0 ? (
+            {displayChartData.length > 0 ? (
               <div ref={chartRef}>
                 <ResponsiveContainer width="100%" height={280}>
-                  <BarChart data={chartData} margin={{ top: 10, right: 20, left: 10, bottom: 5 }}>
+                  <BarChart data={displayChartData} margin={{ top: 10, right: 20, left: 10, bottom: 5 }}>
                     <CartesianGrid strokeDasharray="3 3" className="stroke-border" />
-                    <XAxis 
-                      dataKey="displayDate" 
+                    <XAxis
+                      dataKey="displayDate"
                       angle={-45}
                       textAnchor="end"
                       height={80}
@@ -1008,7 +1121,7 @@ export default function Analytics() {
                       tick={{ fontSize: 10 }}
                     />
                     <YAxis className="text-xs" tick={{ fontSize: 10 }} />
-                    <Tooltip 
+                    <Tooltip
                       contentStyle={{
                         backgroundColor: 'hsl(var(--popover))',
                         border: '1px solid hsl(var(--border))',
@@ -1021,11 +1134,21 @@ export default function Analytics() {
                         return [value, name];
                       }}
                     />
-                    <Bar 
-                      dataKey="total" 
+                    {activationMarkers.map((m) => (
+                      <ReferenceLine
+                        key={m.label}
+                        x={m.x}
+                        stroke="#a61a2f"
+                        strokeDasharray="4 3"
+                        strokeWidth={1.5}
+                        label={{ value: `Mesures ${m.label}`, position: 'top', fill: '#a61a2f', fontSize: 9 }}
+                      />
+                    ))}
+                    <Bar
+                      dataKey="total"
                       radius={[4, 4, 0, 0]}
                     >
-                      {chartData.map((entry, index) => (
+                      {displayChartData.map((entry, index) => (
                         <Cell key={`cell-${index}`} fill={entry.fill} />
                       ))}
                     </Bar>

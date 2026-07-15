@@ -19,6 +19,8 @@ export interface CameraSettings {
   displayName: string | null;
   neighbourhood: string;
   cameraType: string;
+  /** Whether this device's counts are trustworthy enough for headline figures. */
+  reliable: boolean;
 }
 
 export interface BollardSettings {

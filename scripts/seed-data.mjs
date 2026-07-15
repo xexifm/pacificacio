@@ -12,7 +12,7 @@
 // When the real data source is defined later, re-run this (or replace it) to
 // regenerate public/data/traffic-daily.json. The app only ever reads the JSON.
 
-import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -39,6 +39,17 @@ const DEFAULT_CAMERA_TYPES = {
   CT14: "Càmera", CT15: "Càmera",
   CT16: "Pilona", CT17: "Pilona", CT18: "Pilona", CT19: "Pilona",
   CT20: "Càmera", CT21: "Càmera", CT22: "Càmera", CT23: "Càmera",
+};
+
+// Cameras whose counts are not trustworthy enough for headline figures.
+const UNRELIABLE_CAMERAS = new Set([
+  "CT13", "CT15", "CT16", "CT17", "CT21", "CT22", "CT23",
+]);
+
+// Activation dates of the traffic-calming measures (pilones/càmeres) per barri.
+const DEFAULT_BOLLARD = {
+  bollardStartDatePedro: "2025-04-25",
+  bollardStartDateGavarra: "2025-03-01",
 };
 
 const CAMERA_DISPLAY_NAMES = {
@@ -129,21 +140,27 @@ function main() {
         displayName: CAMERA_DISPLAY_NAMES[cameraId] ?? null,
         neighbourhood: DEFAULT_CAMERA_MAPPINGS[cameraId],
         cameraType: DEFAULT_CAMERA_TYPES[cameraId] ?? "Càmera",
+        reliable: !UNRELIABLE_CAMERAS.has(cameraId),
       })),
-    bollard: {
-      bollardStartDatePedro: null,
-      bollardStartDateGavarra: null,
-    },
+    bollard: { ...DEFAULT_BOLLARD },
   };
 
   mkdirSync(OUT_DIR, { recursive: true });
   writeFileSync(resolve(OUT_DIR, "traffic-daily.json"), JSON.stringify(trafficOut));
-  writeFileSync(resolve(OUT_DIR, "settings.json"), JSON.stringify(settingsOut, null, 2));
+  // settings.json is config the admin maintains (dates, reliability). Only write
+  // it when absent so re-seeding the traffic data never clobbers those edits.
+  const settingsPath = resolve(OUT_DIR, "settings.json");
+  if (!existsSync(settingsPath)) {
+    writeFileSync(settingsPath, JSON.stringify(settingsOut, null, 2));
+    console.log("[seed] Wrote default settings.json");
+  } else {
+    console.log("[seed] Kept existing settings.json (not overwritten)");
+  }
 
   console.log(`[seed] Rows read: ${read}, skipped: ${skipped}`);
   console.log(`[seed] Daily aggregated rows: ${rows.length}`);
   console.log(`[seed] Date span: ${meta.dateFrom} → ${meta.dateTo}`);
-  console.log(`[seed] Wrote public/data/traffic-daily.json and settings.json`);
+  console.log(`[seed] Wrote public/data/traffic-daily.json`);
 }
 
 main();

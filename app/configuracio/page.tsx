@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Download, Info } from "lucide-react";
 import { getCameraSettings, getBollardSettings } from "@/lib/dataStore";
@@ -59,6 +60,7 @@ export default function Configuracio() {
         displayName: c.displayName ?? null,
         neighbourhood: c.neighbourhood,
         cameraType: c.cameraType || "Càmera",
+        reliable: c.reliable !== false,
       })),
       bollard: {
         bollardStartDatePedro: pedro || null,
@@ -105,11 +107,16 @@ export default function Configuracio() {
             <Card>
               <CardHeader>
                 <CardTitle className="text-lg">Assignació de càmeres</CardTitle>
-                <CardDescription>Barri i tipus de dispositiu per a cada càmera.</CardDescription>
+                <CardDescription>
+                  Barri, tipus de dispositiu i fiabilitat de cada càmera. Les càmeres
+                  marcades com a <strong>no fiables</strong> s'exclouen dels indicadors
+                  d'impacte (titular), però es mostren igualment a les taules de detall.
+                </CardDescription>
               </CardHeader>
               <CardContent>
                 <div className="flex items-center gap-3 mb-2">
                   <div className="flex-1 min-w-0" />
+                  <span className="w-16 text-xs text-muted-foreground text-center">Fiable</span>
                   <span className="w-28 text-xs text-muted-foreground text-center">Tipus dispositiu</span>
                   <span className="w-28 text-xs text-muted-foreground text-center">Barri</span>
                 </div>
@@ -129,6 +136,14 @@ export default function Configuracio() {
                             — {cam.displayName}
                           </span>
                         )}
+                      </div>
+                      <div className="w-16 flex justify-center">
+                        <Checkbox
+                          checked={cam.reliable !== false}
+                          onCheckedChange={(v) => update(cam.cameraId, { reliable: v === true })}
+                          data-testid={`check-reliable-${cam.cameraId}`}
+                          aria-label={`Fiable ${cam.cameraId}`}
+                        />
                       </div>
                       <Select
                         value={cam.cameraType || "Càmera"}
@@ -168,9 +183,10 @@ export default function Configuracio() {
 
             <Card>
               <CardHeader>
-                <CardTitle className="text-lg">Data d'activació de les pilones</CardTitle>
+                <CardTitle className="text-lg">Data d'activació de les mesures (pilones/càmeres)</CardTitle>
                 <CardDescription>
-                  Primera data en què les pilones van estar actives (aixecades) per cada barri.
+                  Primera data en què les mesures de pacificació van entrar en funcionament
+                  a cada barri. És la data de referència per a l'anàlisi d'impacte (abans/després).
                 </CardDescription>
               </CardHeader>
               <CardContent>

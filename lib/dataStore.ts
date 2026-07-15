@@ -41,6 +41,8 @@ const rawSettingsSchema = z.object({
       displayName: z.string().nullable(),
       neighbourhood: z.string(),
       cameraType: z.string(),
+      // Older settings files may omit this; default to trustworthy.
+      reliable: z.boolean().default(true),
     }),
   ),
   bollard: z.object({
