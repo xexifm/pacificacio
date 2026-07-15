@@ -3,12 +3,13 @@ import "./globals.css";
 import { Providers } from "./providers";
 import Navigation from "@/components/Navigation";
 import { ATTRIBUTION } from "@/lib/attribution";
+import { asset } from "@/lib/paths";
 
 export const metadata: Metadata = {
   title: "DADES PACIFICACIÓ · Cornellà de Llobregat",
   description:
-    "Eina per transformar i analitzar dades de trànsit de vehicles de les càmeres de Cornellà de Llobregat (format llarg: Càmera, Datahora, TipusVehicle, Valor).",
-  icons: { icon: "/favicon.png" },
+    "Panell públic d'analítiques de trànsit de vehicles de les càmeres de Cornellà de Llobregat (CT10–CT23): volums per barri, dies laborables i festius, i efecte de les pilones.",
+  icons: { icon: asset("/favicon.png") },
 };
 
 export default function RootLayout({

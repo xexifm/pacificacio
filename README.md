@@ -1,110 +1,105 @@
 # DADES PACIFICACIÓ — Cornellà de Llobregat
 
-Eina web per **transformar i analitzar dades de trànsit** de les 14 càmeres
-(CT10–CT23) de Cornellà de Llobregat. Permet pujar CSV/Excel, normalitzar-los
-a format llarg (`Càmera, Datahora, TipusVehicle, Valor`), i explorar-los amb
-analítiques per barri que distingeixen dies laborables, festius amb pilones
-baixades i festius amb pilones aixecades, amb generació d'informes PDF.
+Panell públic d'**analítiques de trànsit** de les 14 càmeres (CT10–CT23) de
+Cornellà de Llobregat. Mostra els volums de vehicles per barri (Pedró / Gavarra),
+distingint dies laborables, festius amb pilones baixades i festius amb pilones
+aixecades, amb generació d'informes PDF.
 
-Aquesta és una **reescriptura des de zero** de l'aplicació original (Vite SPA +
-Express) sobre una arquitectura moderna unificada amb **Next.js (App Router)**,
-mantenint tota la funcionalitat.
+És una aplicació **100% estàtica** (client-side): no té servidor ni base de dades
+i no depèn de cap servei extern. Totes les dades viuen dins el repositori i es
+publica com a web estàtic a **GitHub Pages**.
+
+**URL pública:** https://xexifm.github.io/pacificacio/
 
 ## Stack
 
-- **Next.js 14 (App Router)** + **React 18** + **TypeScript** — frontend i
-  backend (API Route Handlers) en un sol framework.
-- **PostgreSQL** amb **Drizzle ORM** (driver `postgres.js`, compatible amb Neon,
-  Supabase o Postgres local).
-- **Tailwind CSS** + **shadcn/ui** (Radix UI) — "New York", tema HSL, mode fosc.
-- **Recharts** (gràfics), **jsPDF** + **html2canvas** (informes PDF),
-  **PapaParse-free** parser CSV propi, **SheetJS/xlsx** (Excel), **date-fns**.
-- **TanStack Query** per a l'estat del servidor al client.
+- **Next.js 14 (App Router) amb `output: 'export'`** → HTML estàtic.
+- **React 18** + **TypeScript**.
+- **Tailwind CSS** + **shadcn/ui** (Radix), tema HSL, "New York".
+- **Recharts** (gràfics), **jsPDF** + **html2canvas** (informe PDF), **date-fns**.
+- **TanStack Query** per orquestrar la càrrega de dades al client.
 
 ## Arquitectura
 
 ```
 app/
-  layout.tsx            Layout arrel, navegació, providers, fonts
-  page.tsx              Secció administrador (login + càrrega + configuració)
-  analytics/page.tsx    Analítiques (filtres, KPIs, gràfic, cobertura, PDF)
-  reset-password/page.tsx
-  api/                  Route Handlers (Node runtime) — substitueixen l'Express
-    admin/…             login, logout, session, reset, camera-settings,
-                        bollard-settings, clear-data, refresh-data
-    traffic-data/       GET (públic) · POST (protegit)
-    camera-settings/ · bollard-settings/ · data-coverage/ ·
-    detailed-data-coverage/ · export-excel/
-components/             Navigation + components d'app + shadcn/ui
+  layout.tsx            Layout arrel, navegació, providers, fonts, favicon
+  page.tsx              Dashboard d'analítiques (filtres, KPIs, gràfic, cobertura, PDF)
+  configuracio/page.tsx Editor de config (barri/dispositiu/pilones) → descarrega settings.json
+components/             Navigation, DataCoverageTable + shadcn/ui
 lib/
-  db/index.ts           Connexió Drizzle (postgres.js, singleton)
-  schema.ts             Esquema Drizzle + tipus compartits
-  storage.ts            Capa d'accés a dades (server-only)
-  auth.ts               Validació de sessió admin (Bearer token)
-  csvTransformer.ts     Parser CSV (format ample i llarg) + Excel
-  holidays.ts · neighbourhoods.ts · vehicleTypes.ts
-  pdfReport.ts          Generador d'informe PDF
-  queryClient.ts        Client TanStack Query
-hooks/                  use-toast, use-mobile
+  dataStore.ts          ÚNICA font de dades del client (llegeix public/data/*.json)
+  types.ts              Tipus TS plans (sense dependències de servidor)
+  paths.ts              Helper asset() per al basePath de GitHub Pages
+  holidays.ts · neighbourhoods.ts · vehicleTypes.ts · pdfReport.ts · attribution.ts
+public/data/
+  traffic-daily.json    Dades agregades a diari (camera · data · tipusVehicle · valor)
+  settings.json         Config: mapa càmera→barri, tipus dispositiu, dates de pilones
+scripts/
+  seed-data.mjs         Genera public/data/traffic-daily.json des d'un CSV (ús puntual)
+.github/workflows/
+  deploy.yml            Build estàtic + desplegament a GitHub Pages
 ```
 
-L'autenticació d'admin usa un token Bearer (guardat a `localStorage`) validat
-contra la taula `admin_sessions` (hash SHA-256). Les contrasenyes s'emmagatzemen
-amb bcrypt a `admin_config`.
+### Model de dades
 
-## Posada en marxa
+Les dades canòniques són **fitxers JSON commitejats** a `public/data/`. El dataset
+horari original (~555 k files) s'**agrega a diari sense pèrdua** (43 k files, ~1,5 MB),
+que és tota la granularitat que necessiten les vistes (gràfic, mitjanes per barri,
+cobertura). `lib/dataStore.ts` és l'únic mòdul que sap d'on surten les dades: el dia
+que canviï l'origen, només cal tocar aquest fitxer i regenerar el JSON.
 
-1. **Requisits**: Node.js 20+ i una base de dades PostgreSQL.
+## Posada en marxa (desenvolupament)
 
-2. **Variables d'entorn** — copia `.env.example` a `.env` i omple:
+```bash
+npm install
+npm run dev            # http://localhost:3000
+```
 
-   ```bash
-   cp .env.example .env
-   # DATABASE_URL=postgresql://user:pass@host:5432/db
-   # ADMIN_PASSWORD=CORNELLA        # contrasenya inicial d'admin
-   # ADMIN_EMAIL=                   # opcional (flux de reset)
-   # APP_BASE_URL=http://localhost:3000
-   ```
+## Desplegament a GitHub Pages
 
-3. **Instal·la i prepara la base de dades**:
+El desplegament és automàtic via GitHub Actions (`.github/workflows/deploy.yml`) a
+cada push a la branca de treball.
 
-   ```bash
-   npm install
-   npm run db:push        # crea les taules segons lib/schema.ts
-   ```
+**Configuració única (una sola vegada):** a GitHub → *Settings → Pages →
+Build and deployment → Source*, selecciona **GitHub Actions**. A partir d'aquí,
+cada push reconstrueix i publica el web a https://xexifm.github.io/pacificacio/.
 
-4. **Desenvolupament**:
+Build local equivalent:
 
-   ```bash
-   npm run dev            # http://localhost:3000
-   ```
+```bash
+NEXT_PUBLIC_BASE_PATH=/pacificacio npm run build   # genera ./out
+```
 
-5. **Producció**:
+## Actualitzar les dades
 
-   ```bash
-   npm run build
-   npm run start
-   ```
+Ara mateix les dades provenen d'un CSV de mostra. Per regenerar-les:
+
+```bash
+node scripts/seed-data.mjs /ruta/al/fitxer.csv
+```
+
+Això reescriu `public/data/traffic-daily.json`. Fes commit del canvi i el web es
+tornarà a desplegar. *(L'origen de dades definitiu es definirà més endavant; el
+disseny de `lib/dataStore.ts` permet canviar-lo sense tocar la resta de l'app.)*
+
+La configuració (barris, tipus de dispositiu, dates de pilones) s'edita a la pàgina
+**Configuració** del web, que descarrega un `settings.json`; substitueix
+`public/data/settings.json` amb el fitxer descarregat i fes-hi commit.
 
 ## Scripts
 
 | Script | Descripció |
 | --- | --- |
-| `npm run dev` | Servidor de desenvolupament (Next) |
-| `npm run build` | Compilació de producció |
-| `npm run start` | Serveix la compilació de producció |
+| `npm run dev` | Servidor de desenvolupament |
+| `npm run build` | Export estàtic a `./out` |
 | `npm run typecheck` | Comprovació de tipus (tsc) |
-| `npm run db:push` | Aplica l'esquema a la base de dades (Drizzle Kit) |
-| `npm run db:generate` / `db:migrate` | Migracions SQL versionades |
+| `npm run seed` | Regenera les dades des del CSV per defecte |
 
-## Notes de dades
+## Notes
 
 - **Càmeres**: CT10–CT23, assignades a barris (Pedró / Gavarra) i tipus de
-  dispositiu (Pilona / Càmera), configurables des de la secció administrador.
-- **Classificació de dies**: laborable, festiu (cap de setmana o festiu oficial
-  llistat per 2024–2026) i, segons la data d'activació de les pilones per barri,
-  festiu "baixat" o "aixecat".
-- **Deduplicació**: la taula `traffic_data` té un índex únic
-  `(camera, dateTime, tipusVehicle)`; les càrregues repetides s'ometen.
-- **Formats d'entrada**: CSV ample (delimitat per `;`, columnes de càmera),
-  CSV llarg (delimitat per `,`) i Excel exportat per la mateixa app.
+  dispositiu (Pilona / Càmera).
+- **Classificació de dies**: laborable, festiu (cap de setmana o festiu oficial de
+  2024–2026) i, segons la data d'activació de les pilones per barri, festiu
+  "baixat" o "aixecat".

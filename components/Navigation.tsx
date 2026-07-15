@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Button } from "@/components/ui/button";
-import { FileText, BarChart3 } from "lucide-react";
+import { BarChart3, SlidersHorizontal } from "lucide-react";
 
 export default function Navigation() {
   const pathname = usePathname();
@@ -13,7 +13,7 @@ export default function Navigation() {
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="flex items-center justify-between h-16">
           <div className="flex items-center gap-2">
-            <FileText className="w-6 h-6 text-primary" />
+            <BarChart3 className="w-6 h-6 text-primary" />
             <span className="text-lg font-semibold text-foreground">DADES PACIFICACIÓ - Cornellà de Llobregat</span>
           </div>
 
@@ -22,21 +22,21 @@ export default function Navigation() {
               <Button
                 variant={pathname === "/" ? "default" : "ghost"}
                 className="gap-2"
-                data-testid="nav-transform"
-              >
-                <FileText className="w-4 h-4" />
-                Secció administrador
-              </Button>
-            </Link>
-
-            <Link href="/analytics">
-              <Button
-                variant={pathname === "/analytics" ? "default" : "ghost"}
-                className="gap-2"
-                data-testid="nav-analytics"
+                data-testid="nav-dashboard"
               >
                 <BarChart3 className="w-4 h-4" />
                 Analítiques
+              </Button>
+            </Link>
+
+            <Link href="/configuracio">
+              <Button
+                variant={pathname === "/configuracio" ? "default" : "ghost"}
+                className="gap-2"
+                data-testid="nav-config"
+              >
+                <SlidersHorizontal className="w-4 h-4" />
+                Configuració
               </Button>
             </Link>
           </div>

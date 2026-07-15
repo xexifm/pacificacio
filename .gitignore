@@ -6,6 +6,8 @@
 # next.js
 /.next/
 /out/
+/build
+/dist
 next-env.d.ts
 
 # production
@@ -24,9 +26,6 @@ yarn-error.log*
 # local env files
 .env
 .env*.local
-
-# drizzle
-/migrations/meta
 
 # typescript
 *.tsbuildinfo

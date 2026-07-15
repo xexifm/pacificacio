@@ -1,1033 +1,1087 @@
 "use client";
 
-import { useState, useCallback, useEffect } from 'react';
-import { useQuery, useMutation } from '@tanstack/react-query';
-import FileUploadZone from '@/components/FileUploadZone';
-import FileInfo from '@/components/FileInfo';
-import DataPreview from '@/components/DataPreview';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { useState, useMemo, useRef, useCallback, useEffect } from 'react';
+import { useQuery } from '@tanstack/react-query';
+import { type TrafficData, type CameraSettings } from '@/lib/types';
+import { getTrafficData, getCameraSettings, getBollardSettings } from '@/lib/dataStore';
+import { asset } from '@/lib/paths';
+import { NEIGHBOURHOODS } from '@/lib/neighbourhoods';
+import { getDayType } from '@/lib/holidays';
+import { VEHICLE_TYPES } from '@/lib/vehicleTypes';
+import { Card } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Download, RotateCcw, CheckCircle, AlertCircle, Trash2, RefreshCw, Lock, LogOut, Settings, FileSpreadsheet } from 'lucide-react';
-import { transformCSV, transformedRowsToCSV, downloadCSV, TransformedRow, transformExcel, isExcelFile } from '@/lib/csvTransformer';
-import { Alert, AlertDescription } from '@/components/ui/alert';
-import { apiRequest, queryClient } from '@/lib/queryClient';
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-  AlertDialogTrigger,
-} from '@/components/ui/alert-dialog';
-import { useToast } from '@/hooks/use-toast';
-import type { CameraSettings } from '@/lib/schema';
+import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from 'recharts';
+import { Calendar } from '@/components/ui/calendar';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { CalendarIcon, BarChart3, ChevronDown, ChevronRight, Download, Loader2, AlertTriangle } from 'lucide-react';
+import { Tooltip as UITooltip, TooltipContent as UITooltipContent, TooltipTrigger as UITooltipTrigger } from '@/components/ui/tooltip';
+import { format, startOfYear, endOfYear } from 'date-fns';
+import { ca } from 'date-fns/locale';
+import type { DateRange } from 'react-day-picker';
+import DataCoverageTable from '@/components/DataCoverageTable';
+import { ATTRIBUTION } from '@/lib/attribution';
+import { generateAnalyticsReport } from '@/lib/pdfReport';
 
-const CAMERAS = ['CT10', 'CT11', 'CT12', 'CT13', 'CT14', 'CT15', 'CT16', 'CT17', 'CT18', 'CT19', 'CT20', 'CT21', 'CT22', 'CT23'];
-const NEIGHBOURHOODS = ['Pedró', 'Gavarra'];
+const cornellaLogo = asset('/assets/cornella_logo.png');
+const bollardImage = asset('/assets/bollard.jpg');
 
-function AdminLoginForm({ onLogin }: { onLogin: (token: string) => void }) {
-  const [password, setPassword] = useState('');
-  const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [showResetRequest, setShowResetRequest] = useState(false);
-  const [resetRequested, setResetRequested] = useState(false);
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setIsLoading(true);
-    setError(null);
-
-    try {
-      const response = await apiRequest('POST', '/api/admin/login', { password });
-      
-      if (!response.ok) {
-        const data = await response.json();
-        throw new Error(data.error || 'Contrasenya incorrecta');
-      }
-
-      const { token } = await response.json();
-      localStorage.setItem('adminToken', token);
-      onLogin(token);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Error d\'autenticació');
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  const handleResetRequest = async () => {
-    try {
-      await apiRequest('POST', '/api/admin/request-reset', {});
-      setResetRequested(true);
-    } catch (err) {
-      setError('Error enviant sol·licitud de restabliment');
-    }
-  };
-
-  return (
-    <div className="min-h-screen bg-background flex items-center justify-center p-4">
-      <Card className="w-full max-w-md">
-        <CardHeader className="text-center">
-          <Lock className="w-12 h-12 mx-auto text-primary mb-4" />
-          <CardTitle>Accés d'administrador</CardTitle>
-          <CardDescription>
-            Introdueix la contrasenya per accedir a la pàgina de càrrega de dades.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          {!showResetRequest ? (
-            <form onSubmit={handleSubmit} className="space-y-4">
-              {error && (
-                <Alert variant="destructive">
-                  <AlertCircle className="h-4 w-4" />
-                  <AlertDescription>{error}</AlertDescription>
-                </Alert>
-              )}
-
-              <div className="space-y-2">
-                <Label htmlFor="password">Contrasenya</Label>
-                <Input
-                  id="password"
-                  type="password"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  placeholder="Introdueix la contrasenya"
-                  required
-                  data-testid="input-admin-password"
-                />
-              </div>
-
-              <Button 
-                type="submit" 
-                className="w-full" 
-                disabled={isLoading}
-                data-testid="button-admin-login"
-              >
-                {isLoading ? 'Accedint...' : 'Accedir'}
-              </Button>
-
-              <Button
-                type="button"
-                variant="ghost"
-                className="w-full text-sm"
-                onClick={() => setShowResetRequest(true)}
-                data-testid="button-forgot-password"
-              >
-                Has oblidat la contrasenya?
-              </Button>
-            </form>
-          ) : (
-            <div className="space-y-4">
-              {resetRequested ? (
-                <Alert className="border-green-500/50 bg-green-50 dark:bg-green-950/20">
-                  <CheckCircle className="h-4 w-4 text-green-600" />
-                  <AlertDescription className="text-green-800 dark:text-green-200">
-                    Si l'email d'administrador està configurat, rebràs un enllaç per restablir la contrasenya.
-                  </AlertDescription>
-                </Alert>
-              ) : (
-                <>
-                  <p className="text-sm text-muted-foreground">
-                    S'enviarà un enllaç de restabliment a l'email de l'administrador configurat.
-                  </p>
-                  <Button 
-                    onClick={handleResetRequest}
-                    className="w-full"
-                    data-testid="button-request-reset"
-                  >
-                    Sol·licitar restabliment
-                  </Button>
-                </>
-              )}
-              <Button
-                variant="ghost"
-                className="w-full"
-                onClick={() => {
-                  setShowResetRequest(false);
-                  setResetRequested(false);
-                }}
-              >
-                Tornar a l'inici de sessió
-              </Button>
-            </div>
-          )}
-        </CardContent>
-      </Card>
-    </div>
-  );
-}
+const UNRELIABLE_CAMERAS = new Set([
+  'CT13', 'CT15', 'CT16', 'CT17', 'CT21', 'CT22', 'CT23',
+]);
+const UNRELIABLE_CAMERA_MSG =
+  "Les dades d'aquesta càmera no són fiables i no haurien d'usar-se per a estudis de mobilitat o anàlisis similars.";
 
 interface BollardSettings {
   bollardStartDatePedro: string | null;
   bollardStartDateGavarra: string | null;
 }
 
-function CameraSettingsPanel({ token }: { token: string }) {
-  const { toast } = useToast();
+type DayCategory = 'working' | 'holiday_down' | 'holiday_up';
+
+const DAY_CATEGORY_COLORS = {
+  working: '#3b82f6',
+  holiday_down: '#22c55e', 
+  holiday_up: '#ef4444',
+};
+
+
+function normalizeToDateOnly(date: Date): Date {
+  const year = date.getUTCFullYear();
+  const month = date.getUTCMonth();
+  const day = date.getUTCDate();
+  return new Date(Date.UTC(year, month, day, 12, 0, 0, 0));
+}
+
+function getUTCDateKey(date: Date): string {
+  const year = date.getUTCFullYear();
+  const month = String(date.getUTCMonth() + 1).padStart(2, '0');
+  const day = String(date.getUTCDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function getDayCategory(
+  date: Date,
+  neighbourhood: string | undefined,
+  bollardSettings: BollardSettings | undefined
+): DayCategory {
+  const normalizedDate = normalizeToDateOnly(date);
+  const dayType = getDayType(normalizedDate);
   
-  const { data: cameraSettings, isLoading } = useQuery<CameraSettings[]>({
-    queryKey: ['/api/admin/camera-settings'],
-    queryFn: async () => {
-      const response = await fetch('/api/admin/camera-settings', {
-        headers: { 'Authorization': `Bearer ${token}` }
-      });
-      if (!response.ok) throw new Error('Failed to fetch camera settings');
-      return response.json();
-    }
+  if (dayType === 'working') {
+    return 'working';
+  }
+  
+  const dateStr = getUTCDateKey(normalizedDate);
+  
+  let bollardStartDate: string | null = null;
+  if (neighbourhood === 'Pedró') {
+    bollardStartDate = bollardSettings?.bollardStartDatePedro || null;
+  } else if (neighbourhood === 'Gavarra') {
+    bollardStartDate = bollardSettings?.bollardStartDateGavarra || null;
+  }
+  
+  if (!bollardStartDate) {
+    return 'holiday_down';
+  }
+  
+  return dateStr >= bollardStartDate ? 'holiday_up' : 'holiday_down';
+}
+
+export default function Analytics() {
+  const [selectedNeighbourhood, setSelectedNeighbourhood] = useState<string>('all');
+  const [dateRange, setDateRange] = useState<DateRange | undefined>(undefined);
+  const [selectedVehicleTypes, setSelectedVehicleTypes] = useState<string[]>([]);
+  const [selectedCameras, setSelectedCameras] = useState<string[]>([]);
+  const [selectedDeviceType, setSelectedDeviceType] = useState<string>('all');
+  const [vehicleBreakdownOpen, setVehicleBreakdownOpen] = useState<Record<string, boolean>>({});
+  const [isGeneratingPDF, setIsGeneratingPDF] = useState(false);
+  const [calendarOpen, setCalendarOpen] = useState(false);
+  const [pendingRange, setPendingRange] = useState<DateRange | undefined>(undefined);
+  const chartRef = useRef<HTMLDivElement>(null);
+
+  const { data: trafficData = [], isLoading } = useQuery<TrafficData[]>({
+    queryKey: ['traffic-data'],
+    queryFn: getTrafficData,
+  });
+
+  const { data: cameraSettings = [] } = useQuery<CameraSettings[]>({
+    queryKey: ['camera-settings'],
+    queryFn: getCameraSettings,
   });
 
   const { data: bollardSettings } = useQuery<BollardSettings>({
-    queryKey: ['/api/bollard-settings'],
+    queryKey: ['bollard-settings'],
+    queryFn: getBollardSettings,
   });
 
-  const [localSettings, setLocalSettings] = useState<Record<string, string>>({});
-  const [localCameraTypes, setLocalCameraTypes] = useState<Record<string, string>>({});
-  const [hasChanges, setHasChanges] = useState(false);
-  const [bollardPedro, setBollardPedro] = useState('');
-  const [bollardGavarra, setBollardGavarra] = useState('');
-  const [hasBollardChanges, setHasBollardChanges] = useState(false);
-
-  useEffect(() => {
-    if (cameraSettings) {
-      const settingsMap: Record<string, string> = {};
-      const typesMap: Record<string, string> = {};
-      cameraSettings.forEach(s => {
-        settingsMap[s.cameraId] = s.neighbourhood;
-        typesMap[s.cameraId] = s.cameraType || 'Càmera';
-      });
-      CAMERAS.forEach(cam => {
-        if (!settingsMap[cam]) {
-          settingsMap[cam] = cam.startsWith('CT1') && parseInt(cam.slice(2)) <= 15 ? 'Pedró' : 'Gavarra';
-        }
-        if (!typesMap[cam]) {
-          typesMap[cam] = 'Càmera';
-        }
-      });
-      setLocalSettings(settingsMap);
-      setLocalCameraTypes(typesMap);
-    }
+  const cameraToNeighbourhood = useMemo(() => {
+    const mapping: Record<string, string> = {};
+    cameraSettings.forEach(s => {
+      mapping[s.cameraId] = s.neighbourhood;
+    });
+    return mapping;
   }, [cameraSettings]);
 
-  useEffect(() => {
-    if (bollardSettings) {
-      setBollardPedro(bollardSettings.bollardStartDatePedro || '');
-      setBollardGavarra(bollardSettings.bollardStartDateGavarra || '');
-    }
-  }, [bollardSettings]);
-
-  const updateMutation = useMutation({
-    mutationFn: async (settings: { cameraId: string; neighbourhood: string }[]) => {
-      const response = await fetch('/api/admin/camera-settings', {
-        method: 'PUT',
-        headers: { 
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}` 
-        },
-        body: JSON.stringify(settings)
-      });
-      if (!response.ok) throw new Error('Failed to update camera settings');
-      return response.json();
-    },
-    onSuccess: () => {
-      toast({ title: 'Configuració guardada', description: 'Les assignacions de càmera s\'han actualitzat.' });
-      setHasChanges(false);
-      queryClient.invalidateQueries({ queryKey: ['/api/admin/camera-settings'] });
-      queryClient.invalidateQueries({ queryKey: ['/api/camera-settings'] });
-    },
-    onError: (err: Error) => {
-      toast({ title: 'Error', description: err.message, variant: 'destructive' });
-    }
-  });
-
-  const updateBollardMutation = useMutation({
-    mutationFn: async (settings: BollardSettings) => {
-      const response = await fetch('/api/admin/bollard-settings', {
-        method: 'PUT',
-        headers: { 
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}` 
-        },
-        body: JSON.stringify(settings)
-      });
-      if (!response.ok) throw new Error('Failed to update bollard settings');
-      return response.json();
-    },
-    onSuccess: () => {
-      toast({ title: 'Configuració guardada', description: 'Les dates dels pilones s\'han actualitzat.' });
-      setHasBollardChanges(false);
-      queryClient.invalidateQueries({ queryKey: ['/api/bollard-settings'] });
-    },
-    onError: (err: Error) => {
-      toast({ title: 'Error', description: err.message, variant: 'destructive' });
-    }
-  });
-
-  const handleNeighbourhoodChange = (cameraId: string, neighbourhood: string) => {
-    setLocalSettings(prev => ({ ...prev, [cameraId]: neighbourhood }));
-    setHasChanges(true);
-  };
-
-  const handleCameraTypeChange = (cameraId: string, cameraType: string) => {
-    setLocalCameraTypes(prev => ({ ...prev, [cameraId]: cameraType }));
-    setHasChanges(true);
-  };
-
-  const handleSave = () => {
-    const settings = Object.entries(localSettings).map(([cameraId, neighbourhood]) => ({
-      cameraId,
-      neighbourhood,
-      cameraType: localCameraTypes[cameraId] || 'Càmera',
-    }));
-    updateMutation.mutate(settings);
-  };
-
-  const handleSaveBollard = () => {
-    updateBollardMutation.mutate({
-      bollardStartDatePedro: bollardPedro || null,
-      bollardStartDateGavarra: bollardGavarra || null,
+  const cameraToType = useMemo(() => {
+    const mapping: Record<string, string> = {};
+    cameraSettings.forEach(s => {
+      mapping[s.cameraId] = s.cameraType || 'Càmera';
     });
-  };
+    return mapping;
+  }, [cameraSettings]);
 
-  const getDisplayName = (cameraId: string): string | null => {
-    const setting = cameraSettings?.find(s => s.cameraId === cameraId);
-    return setting?.displayName || null;
-  };
-
-  if (isLoading) {
-    return <div className="text-center py-4 text-muted-foreground">Carregant configuració...</div>;
-  }
-
-  return (
-    <div className="space-y-6">
-      <div>
-        <h4 className="text-sm font-medium mb-3">Assignació de càmeres a barris</h4>
-        <div className="flex items-center gap-3 px-0 mb-1">
-          <div className="flex-1 min-w-0" />
-          <span className="w-28 text-xs text-muted-foreground text-center">Tipus dispositiu</span>
-          <span className="w-28 text-xs text-muted-foreground text-center">Barri</span>
-        </div>
-        <div className="space-y-2">
-          {CAMERAS.map(cam => {
-            const displayName = getDisplayName(cam);
-            return (
-              <div key={cam} className="flex items-center gap-3 py-1 border-b border-border/50 last:border-0">
-                <div className="flex-1 min-w-0">
-                  <span className="font-mono text-sm font-medium">{cam}</span>
-                  {displayName && (
-                    <span className="text-muted-foreground text-xs ml-2 truncate" title={displayName}>
-                      — {displayName}
-                    </span>
-                  )}
-                </div>
-                <Select
-                  value={localCameraTypes[cam] || 'Càmera'}
-                  onValueChange={(value) => handleCameraTypeChange(cam, value)}
-                >
-                  <SelectTrigger className="w-28" data-testid={`select-camera-type-${cam}`}>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="Pilona">Pilona</SelectItem>
-                    <SelectItem value="Càmera">Càmera</SelectItem>
-                  </SelectContent>
-                </Select>
-                <Select
-                  value={localSettings[cam] || 'Pedró'}
-                  onValueChange={(value) => handleNeighbourhoodChange(cam, value)}
-                >
-                  <SelectTrigger className="w-28" data-testid={`select-camera-${cam}`}>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {NEIGHBOURHOODS.map(n => (
-                      <SelectItem key={n} value={n}>{n}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            );
-          })}
-        </div>
-        
-        {hasChanges && (
-          <Button 
-            onClick={handleSave} 
-            disabled={updateMutation.isPending}
-            className="mt-3"
-            data-testid="button-save-camera-settings"
-          >
-            {updateMutation.isPending ? 'Guardant...' : 'Guardar canvis de càmeres'}
-          </Button>
-        )}
-      </div>
-
-      <div className="border-t pt-4">
-        <h4 className="text-sm font-medium mb-3">Data d'activació dels pilones</h4>
-        <p className="text-xs text-muted-foreground mb-3">
-          Indica la primera data en què els pilones van estar actius (aixecats) per cada barri.
-        </p>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <div>
-            <Label htmlFor="bollard-pedro" className="text-sm">Pedró</Label>
-            <Input
-              id="bollard-pedro"
-              type="date"
-              value={bollardPedro}
-              onChange={(e) => {
-                setBollardPedro(e.target.value);
-                setHasBollardChanges(true);
-              }}
-              className="mt-1"
-              data-testid="input-bollard-pedro"
-            />
-          </div>
-          <div>
-            <Label htmlFor="bollard-gavarra" className="text-sm">Gavarra</Label>
-            <Input
-              id="bollard-gavarra"
-              type="date"
-              value={bollardGavarra}
-              onChange={(e) => {
-                setBollardGavarra(e.target.value);
-                setHasBollardChanges(true);
-              }}
-              className="mt-1"
-              data-testid="input-bollard-gavarra"
-            />
-          </div>
-        </div>
-        
-        {hasBollardChanges && (
-          <Button 
-            onClick={handleSaveBollard} 
-            disabled={updateBollardMutation.isPending}
-            className="mt-3"
-            data-testid="button-save-bollard-settings"
-          >
-            {updateBollardMutation.isPending ? 'Guardant...' : 'Guardar dates de pilones'}
-          </Button>
-        )}
-      </div>
-    </div>
-  );
-}
-
-export default function Home() {
-  const [adminToken, setAdminToken] = useState<string | null>(null);
-  const [isCheckingAuth, setIsCheckingAuth] = useState(true);
-  
-  const [file, setFile] = useState<File | null>(null);
-  const [transformedData, setTransformedData] = useState<TransformedRow[]>([]);
-  const [isProcessing, setIsProcessing] = useState(false);
-  const [isSaving, setIsSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [success, setSuccess] = useState<string | null>(null);
-  const [isClearing, setIsClearing] = useState(false);
-  const [isRefreshing, setIsRefreshing] = useState(false);
-  const [isDownloadingExcel, setIsDownloadingExcel] = useState(false);
-  const [confirmDeleteText, setConfirmDeleteText] = useState('');
-  const [importErrors, setImportErrors] = useState<string[]>([]);
-  const [uploadProgress, setUploadProgress] = useState<{ current: number; total: number } | null>(null);
-  const { toast } = useToast();
-
-  useEffect(() => {
-    const checkAuth = async () => {
-      const storedToken = localStorage.getItem('adminToken');
-      if (!storedToken) {
-        setIsCheckingAuth(false);
-        return;
-      }
-
-      try {
-        const response = await fetch('/api/admin/session', {
-          headers: { 'Authorization': `Bearer ${storedToken}` }
-        });
-        const { authenticated } = await response.json();
-        
-        if (authenticated) {
-          setAdminToken(storedToken);
-        } else {
-          localStorage.removeItem('adminToken');
+  const data = useMemo(() => {
+    // Parse dateTime from datahora ("YYYY-MM-DD HH:MM") because the DB dateTime field
+    // comes back as null via JSON serialization (Drizzle produces Invalid Date from the
+    // Neon HTTP driver response, and JSON.stringify(Invalid Date) = null).
+    // datahora is always stored in a reliable, well-defined format — use it as ground truth.
+    const result = trafficData.map(row => {
+      const [datePart, timePart] = row.datahora.split(' ');
+      let parsedDate: Date | null = null;
+      if (datePart) {
+        const candidate = new Date(`${datePart}T${timePart ?? '00:00'}:00.000Z`);
+        if (!isNaN(candidate.getTime())) {
+          parsedDate = candidate;
         }
-      } catch {
-        localStorage.removeItem('adminToken');
       }
-      
-      setIsCheckingAuth(false);
-    };
 
-    checkAuth();
-  }, []);
+      const dynamicNeighbourhood = cameraToNeighbourhood[row.camera] || row.neighbourhood || undefined;
 
-  const handleLogout = async () => {
-    if (adminToken) {
-      try {
-        await fetch('/api/admin/logout', {
-          method: 'POST',
-          headers: { 'Authorization': `Bearer ${adminToken}` }
-        });
-      } catch {}
-    }
-    localStorage.removeItem('adminToken');
-    setAdminToken(null);
-  };
-
-  const CHUNK_SIZE = 10_000;
-
-  const saveToDatabase = useCallback(async (data: TransformedRow[]) => {
-    if (!adminToken) return;
-
-    setIsSaving(true);
-    setError(null);
-    setSuccess(null);
-    setUploadProgress(null);
-
-    try {
-      const dbRecords = data.map(row => ({
+      return {
         camera: row.camera,
         datahora: row.datahora,
         tipusVehicle: row.tipusVehicle,
         valor: row.valor,
-        dateTime: row.dateTime ? row.dateTime.toISOString() : new Date().toISOString(),
-        neighbourhood: row.neighbourhood || null,
-      }));
+        dateTime: parsedDate,
+        neighbourhood: dynamicNeighbourhood,
+      };
+    });
 
-      const totalChunks = Math.ceil(dbRecords.length / CHUNK_SIZE);
-      console.log(`[Client] Uploading ${dbRecords.length} records in ${totalChunks} chunks of ${CHUNK_SIZE}...`);
+    return result;
+  }, [trafficData, cameraToNeighbourhood]);
 
-      let totalInserted = 0;
-      let totalSkipped = 0;
-
-      for (let i = 0; i < totalChunks; i++) {
-        const chunk = dbRecords.slice(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE);
-        setUploadProgress({ current: i + 1, total: totalChunks });
-
-        const response = await fetch('/api/traffic-data', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${adminToken}`,
-          },
-          body: JSON.stringify(chunk),
-        });
-
-        if (!response.ok) {
-          let errorMsg = 'Error del servidor';
-          try {
-            const errorData = await response.json();
-            errorMsg = errorData.error || errorData.message || `HTTP ${response.status}`;
-          } catch {}
-          throw new Error(`Error en el lot ${i + 1} de ${totalChunks}: ${errorMsg}`);
-        }
-
-        const result = await response.json() as { inserted: number; skipped: number };
-        totalInserted += result.inserted;
-        totalSkipped += result.skipped;
-        console.log(`[Client] Chunk ${i + 1}/${totalChunks}: ${result.inserted} inserted, ${result.skipped} skipped`);
+  const filteredData = useMemo(() => {
+    const result = data.filter(row => {
+      if (selectedNeighbourhood !== 'all' && row.neighbourhood !== selectedNeighbourhood) {
+        return false;
       }
 
-      console.log(`[Client] Upload complete: ${totalInserted} inserted, ${totalSkipped} skipped`);
-      setUploadProgress(null);
-      setSuccess(
-        `Base de dades actualitzada: ${totalInserted.toLocaleString()} nous registres afegits, ${totalSkipped.toLocaleString()} registres duplicats omesos.`
-      );
+      if (selectedVehicleTypes.length > 0 && !selectedVehicleTypes.includes(row.tipusVehicle)) {
+        return false;
+      }
 
-      queryClient.invalidateQueries({ queryKey: ['/api/traffic-data'] });
-      queryClient.invalidateQueries({ queryKey: ['/api/data-coverage'] });
-    } catch (err) {
-      console.error('[Client] Error saving to database:', err);
-      setUploadProgress(null);
-      setSuccess(null);
-      setError(err instanceof Error ? err.message : 'Error guardant a la base de dades');
-    } finally {
-      setIsSaving(false);
-    }
-  }, [adminToken]);
+      if (selectedCameras.length > 0 && !selectedCameras.includes(row.camera)) {
+        return false;
+      }
 
-  const processFile = useCallback(async (selectedFile: File) => {
-    setIsProcessing(true);
-    setError(null);
-    setSuccess(null);
-    setImportErrors([]);
+      if (selectedDeviceType !== 'all') {
+        const deviceType = cameraToType[row.camera] || 'Càmera';
+        if (deviceType !== selectedDeviceType) {
+          return false;
+        }
+      }
+
+      if (dateRange?.from || dateRange?.to) {
+        // Use datahora for date comparison — it's always "YYYY-MM-DD HH:MM" so slice(0,10) is safe
+        const rowDateKey = row.datahora.slice(0, 10);
+        if (dateRange?.from) {
+          const fromDateKey = format(dateRange.from, 'yyyy-MM-dd');
+          if (rowDateKey < fromDateKey) {
+            return false;
+          }
+        }
+        if (dateRange?.to) {
+          const toDateKey = format(dateRange.to, 'yyyy-MM-dd');
+          if (rowDateKey > toDateKey) {
+            return false;
+          }
+        }
+      }
+
+      return true;
+    });
     
-    try {
-      const arrayBuffer = await selectedFile.arrayBuffer();
-      
-      if (isExcelFile(selectedFile)) {
-        console.log('[Client] Detected Excel file, attempting Excel import...');
-        const excelResult = transformExcel(arrayBuffer);
-        
-        if (excelResult.format === 'excel') {
-          if (excelResult.data.length > 0) {
-            console.log(`[Client] Excel import successful: ${excelResult.data.length} records`);
-            setTransformedData(excelResult.data);
+    return result;
+  }, [data, selectedNeighbourhood, dateRange, selectedVehicleTypes, selectedCameras, selectedDeviceType, cameraToType]);
 
-            if (excelResult.errors.length > 0) {
-              setImportErrors(excelResult.errors.slice(0, 10));
-            }
+  const chartData = useMemo(() => {
+    const grouped = new Map<string, { total: number; dateObj: Date; neighbourhoods: Set<string> }>();
 
-            await saveToDatabase(excelResult.data);
-          } else if (excelResult.errors.length > 0) {
-            setImportErrors(excelResult.errors);
-            throw new Error('El fitxer Excel té errors de validació i no s\'han pogut importar dades.');
+    filteredData.forEach(row => {
+      if (row.dateTime) {
+        const dateKey = getUTCDateKey(row.dateTime);
+        const existing = grouped.get(dateKey);
+        if (existing) {
+          existing.total += row.valor;
+          if (row.neighbourhood) {
+            existing.neighbourhoods.add(row.neighbourhood);
+          }
+        } else {
+          const neighbourhoods = new Set<string>();
+          if (row.neighbourhood) {
+            neighbourhoods.add(row.neighbourhood);
+          }
+          const normalizedDate = normalizeToDateOnly(row.dateTime);
+          grouped.set(dateKey, { 
+            total: row.valor, 
+            dateObj: normalizedDate,
+            neighbourhoods
+          });
+        }
+      }
+    });
+
+    return Array.from(grouped.entries())
+      .map(([date, { total, dateObj, neighbourhoods }]) => {
+        let dayCategory: DayCategory;
+        if (selectedNeighbourhood !== 'all') {
+          dayCategory = getDayCategory(dateObj, selectedNeighbourhood, bollardSettings);
+        } else if (neighbourhoods.size === 0) {
+          dayCategory = getDayCategory(dateObj, undefined, bollardSettings);
+        } else if (neighbourhoods.size === 1) {
+          dayCategory = getDayCategory(dateObj, Array.from(neighbourhoods)[0], bollardSettings);
+        } else {
+          const categories = Array.from(neighbourhoods).map(n => getDayCategory(dateObj, n, bollardSettings));
+          if (categories.includes('holiday_up')) {
+            dayCategory = 'holiday_up';
+          } else if (categories.includes('holiday_down')) {
+            dayCategory = 'holiday_down';
           } else {
-            throw new Error('El fitxer Excel no conté dades vàlides.');
+            dayCategory = 'working';
           }
-          return;
         }
-      }
-      
-      const encodings = [
-        { name: 'utf-8', label: 'UTF-8' },
-        { name: 'iso-8859-1', label: 'ISO-8859-1' },
-        { name: 'windows-1252', label: 'Windows-1252' }
-      ];
-      
-      let csvText = '';
-      let detectedEncoding = '';
-      let bestResult = { text: '', recordCount: 0, encoding: '' };
-      
-      for (const { name, label } of encodings) {
-        try {
-          const decoder = new TextDecoder(name, { fatal: true });
-          const decodedText = decoder.decode(arrayBuffer);
-          
-          const testTransform = transformCSV(decodedText);
-          
-          if (testTransform.length > bestResult.recordCount) {
-            bestResult = {
-              text: decodedText,
-              recordCount: testTransform.length,
-              encoding: label
-            };
-          }
-          
-          if (testTransform.length > 0) {
-            csvText = decodedText;
-            detectedEncoding = label;
-            break;
-          }
-        } catch {
-          continue;
-        }
-      }
-      
-      if (!csvText && bestResult.recordCount > 0) {
-        csvText = bestResult.text;
-        detectedEncoding = bestResult.encoding;
-      }
-      
-      if (!csvText) {
-        const decoder = new TextDecoder('utf-8', { fatal: false });
-        csvText = decoder.decode(arrayBuffer);
-        detectedEncoding = 'UTF-8 (amb caràcters no vàlids)';
-      }
-      
-      console.log('[Client] Starting CSV transformation...');
-      console.log('[Client] Detected encoding:', detectedEncoding);
-      const transformed = transformCSV(csvText);
-      
-      if (transformed.length === 0) {
-        // Log first few lines of the file to help diagnose
-        const firstLines = csvText.split('\n').slice(0, 6);
-        console.error('[Client] CSV parse failed. First lines of file:');
-        firstLines.forEach((line, i) => console.error(`  Line ${i}: ${JSON.stringify(line)}`));
-        throw new Error('No s\'han pogut extreure dades del fitxer CSV o Excel');
-      }
-      
-      console.log(`[Client] CSV transformation complete: ${transformed.length} records generated`);
-      setTransformedData(transformed);
+        
+        return {
+          date,
+          total,
+          displayDate: format(dateObj, 'dd MMM yyyy', { locale: ca }),
+          dayCategory,
+          fill: DAY_CATEGORY_COLORS[dayCategory],
+        };
+      })
+      .sort((a, b) => a.date.localeCompare(b.date));
+  }, [filteredData, bollardSettings, selectedNeighbourhood]);
 
-      await saveToDatabase(transformed);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Error processant el fitxer');
-      setTransformedData([]);
-    } finally {
-      setIsProcessing(false);
+  const neighbourhoodAverages = useMemo(() => {
+    // When multiple cameras are selected, we calculate per-camera averages first,
+    // then sum them. This ensures CT10 avg + CT11 avg = combined avg.
+    
+    // Step 1: Group data by camera -> neighbourhood -> dateKey
+    // Structure: Map<camera, Map<neighbourhood, Map<dateKey, { total, dayCategory, byVehicle }>>>
+    const byCameraNeighbourhoodDate = new Map<string, Map<string, Map<string, {
+      total: number;
+      dayCategory: DayCategory;
+      byVehicle: Record<string, number>;
+    }>>>();
+
+    filteredData.forEach(row => {
+      if (row.dateTime && row.neighbourhood && (row.neighbourhood === 'Pedró' || row.neighbourhood === 'Gavarra')) {
+        const dateKey = getUTCDateKey(row.dateTime);
+        const camera = row.camera;
+        
+        if (!byCameraNeighbourhoodDate.has(camera)) {
+          byCameraNeighbourhoodDate.set(camera, new Map());
+        }
+        const cameraData = byCameraNeighbourhoodDate.get(camera)!;
+        
+        if (!cameraData.has(row.neighbourhood)) {
+          cameraData.set(row.neighbourhood, new Map());
+        }
+        const neighbourhoodData = cameraData.get(row.neighbourhood)!;
+        
+        const existing = neighbourhoodData.get(dateKey);
+        if (existing) {
+          existing.total += row.valor;
+          existing.byVehicle[row.tipusVehicle] = (existing.byVehicle[row.tipusVehicle] || 0) + row.valor;
+        } else {
+          const normalizedDate = normalizeToDateOnly(row.dateTime);
+          const dayCategory = getDayCategory(normalizedDate, row.neighbourhood, bollardSettings);
+          neighbourhoodData.set(dateKey, {
+            total: row.valor,
+            dayCategory,
+            byVehicle: { [row.tipusVehicle]: row.valor }
+          });
+        }
+      }
+    });
+
+    // Step 2: Calculate per-camera averages for each neighbourhood and day category
+    interface CameraStats {
+      working: { total: number; days: number; byVehicle: Record<string, { total: number; days: number }> };
+      holidayDown: { total: number; days: number; byVehicle: Record<string, { total: number; days: number }> };
+      holidayUp: { total: number; days: number; byVehicle: Record<string, { total: number; days: number }> };
     }
-  }, [saveToDatabase]);
+    
+    const createEmptyCameraStats = (): CameraStats => ({
+      working: { total: 0, days: 0, byVehicle: {} },
+      holidayDown: { total: 0, days: 0, byVehicle: {} },
+      holidayUp: { total: 0, days: 0, byVehicle: {} }
+    });
 
-  const handleFileSelect = useCallback((selectedFile: File) => {
-    setFile(selectedFile);
-    processFile(selectedFile);
-  }, [processFile]);
+    // Per-camera stats: Map<camera, Map<neighbourhood, CameraStats>>
+    const perCameraStats = new Map<string, Map<string, CameraStats>>();
 
-  const handleClear = useCallback(() => {
-    setFile(null);
-    setTransformedData([]);
-    setError(null);
-    setSuccess(null);
-    setImportErrors([]);
+    byCameraNeighbourhoodDate.forEach((neighbourhoods, camera) => {
+      if (!perCameraStats.has(camera)) {
+        perCameraStats.set(camera, new Map());
+      }
+      const cameraStatsMap = perCameraStats.get(camera)!;
+
+      neighbourhoods.forEach((dates, neighbourhood) => {
+        if (!cameraStatsMap.has(neighbourhood)) {
+          cameraStatsMap.set(neighbourhood, createEmptyCameraStats());
+        }
+        const stats = cameraStatsMap.get(neighbourhood)!;
+
+        dates.forEach(({ total, dayCategory, byVehicle }) => {
+          let target: { total: number; days: number; byVehicle: Record<string, { total: number; days: number }> };
+          if (dayCategory === 'working') {
+            target = stats.working;
+          } else if (dayCategory === 'holiday_down') {
+            target = stats.holidayDown;
+          } else {
+            target = stats.holidayUp;
+          }
+
+          target.total += total;
+          target.days += 1;
+
+          Object.entries(byVehicle).forEach(([vehicle, count]) => {
+            if (!target.byVehicle[vehicle]) {
+              target.byVehicle[vehicle] = { total: 0, days: 0 };
+            }
+            target.byVehicle[vehicle].total += count;
+            target.byVehicle[vehicle].days += 1;
+          });
+        });
+      });
+    });
+
+    // Step 3: Calculate per-camera averages, then sum across cameras
+    const calcCameraAvg = (total: number, days: number) => days > 0 ? total / days : 0;
+
+    interface NeighbourhoodResult {
+      workingAvg: number;
+      workingByVehicle: Record<string, number>;
+      workingDays: number;
+      holidayDownAvg: number;
+      holidayDownByVehicle: Record<string, number>;
+      holidayDownDays: number;
+      holidayUpAvg: number;
+      holidayUpByVehicle: Record<string, number>;
+      holidayUpDays: number;
+    }
+
+    const results: Record<string, NeighbourhoodResult> = {
+      'Pedró': {
+        workingAvg: 0, workingByVehicle: {}, workingDays: 0,
+        holidayDownAvg: 0, holidayDownByVehicle: {}, holidayDownDays: 0,
+        holidayUpAvg: 0, holidayUpByVehicle: {}, holidayUpDays: 0
+      },
+      'Gavarra': {
+        workingAvg: 0, workingByVehicle: {}, workingDays: 0,
+        holidayDownAvg: 0, holidayDownByVehicle: {}, holidayDownDays: 0,
+        holidayUpAvg: 0, holidayUpByVehicle: {}, holidayUpDays: 0
+      }
+    };
+
+    // Track max days across cameras for display (use the camera with most days)
+    const maxDays: Record<string, { working: number; holidayDown: number; holidayUp: number }> = {
+      'Pedró': { working: 0, holidayDown: 0, holidayUp: 0 },
+      'Gavarra': { working: 0, holidayDown: 0, holidayUp: 0 }
+    };
+
+    // Sum per-camera averages for each neighbourhood
+    perCameraStats.forEach((neighbourhoods) => {
+      neighbourhoods.forEach((stats, neighbourhood) => {
+        if (neighbourhood === 'Pedró' || neighbourhood === 'Gavarra') {
+          // Working days
+          results[neighbourhood].workingAvg += calcCameraAvg(stats.working.total, stats.working.days);
+          maxDays[neighbourhood].working = Math.max(maxDays[neighbourhood].working, stats.working.days);
+          
+          Object.entries(stats.working.byVehicle).forEach(([vehicle, { total, days }]) => {
+            results[neighbourhood].workingByVehicle[vehicle] = 
+              (results[neighbourhood].workingByVehicle[vehicle] || 0) + calcCameraAvg(total, days);
+          });
+
+          // Holiday down
+          results[neighbourhood].holidayDownAvg += calcCameraAvg(stats.holidayDown.total, stats.holidayDown.days);
+          maxDays[neighbourhood].holidayDown = Math.max(maxDays[neighbourhood].holidayDown, stats.holidayDown.days);
+          
+          Object.entries(stats.holidayDown.byVehicle).forEach(([vehicle, { total, days }]) => {
+            results[neighbourhood].holidayDownByVehicle[vehicle] = 
+              (results[neighbourhood].holidayDownByVehicle[vehicle] || 0) + calcCameraAvg(total, days);
+          });
+
+          // Holiday up
+          results[neighbourhood].holidayUpAvg += calcCameraAvg(stats.holidayUp.total, stats.holidayUp.days);
+          maxDays[neighbourhood].holidayUp = Math.max(maxDays[neighbourhood].holidayUp, stats.holidayUp.days);
+          
+          Object.entries(stats.holidayUp.byVehicle).forEach(([vehicle, { total, days }]) => {
+            results[neighbourhood].holidayUpByVehicle[vehicle] = 
+              (results[neighbourhood].holidayUpByVehicle[vehicle] || 0) + calcCameraAvg(total, days);
+          });
+        }
+      });
+    });
+
+    // Round the averages and set the day counts
+    (['Pedró', 'Gavarra'] as const).forEach(neighbourhood => {
+      results[neighbourhood].workingAvg = Math.round(results[neighbourhood].workingAvg);
+      results[neighbourhood].workingDays = maxDays[neighbourhood].working;
+      Object.keys(results[neighbourhood].workingByVehicle).forEach(v => {
+        results[neighbourhood].workingByVehicle[v] = Math.round(results[neighbourhood].workingByVehicle[v]);
+      });
+
+      results[neighbourhood].holidayDownAvg = Math.round(results[neighbourhood].holidayDownAvg);
+      results[neighbourhood].holidayDownDays = maxDays[neighbourhood].holidayDown;
+      Object.keys(results[neighbourhood].holidayDownByVehicle).forEach(v => {
+        results[neighbourhood].holidayDownByVehicle[v] = Math.round(results[neighbourhood].holidayDownByVehicle[v]);
+      });
+
+      results[neighbourhood].holidayUpAvg = Math.round(results[neighbourhood].holidayUpAvg);
+      results[neighbourhood].holidayUpDays = maxDays[neighbourhood].holidayUp;
+      Object.keys(results[neighbourhood].holidayUpByVehicle).forEach(v => {
+        results[neighbourhood].holidayUpByVehicle[v] = Math.round(results[neighbourhood].holidayUpByVehicle[v]);
+      });
+    });
+
+    return results;
+  }, [filteredData, bollardSettings]);
+
+  const totalVehicles = useMemo(() => {
+    return filteredData.reduce((sum, row) => sum + row.valor, 0);
+  }, [filteredData]);
+
+  const bollardReduction = useMemo(() => {
+    const calcReduction = (downAvg: number, upAvg: number) => {
+      if (downAvg === 0) return null;
+      return Math.round((upAvg / downAvg) * 100 * 100) / 100;
+    };
+    
+    return {
+      'Pedró': calcReduction(
+        neighbourhoodAverages['Pedró'].holidayDownAvg,
+        neighbourhoodAverages['Pedró'].holidayUpAvg
+      ),
+      'Gavarra': calcReduction(
+        neighbourhoodAverages['Gavarra'].holidayDownAvg,
+        neighbourhoodAverages['Gavarra'].holidayUpAvg
+      ),
+    };
+  }, [neighbourhoodAverages]);
+
+  const availableCameras = useMemo(() => {
+    const cameras = new Set<string>();
+    data.forEach(row => cameras.add(row.camera));
+    return Array.from(cameras).sort((a, b) => {
+      const numA = parseInt(a.replace('CT', ''));
+      const numB = parseInt(b.replace('CT', ''));
+      return numA - numB;
+    });
+  }, [data]);
+
+  const availableYears = useMemo(() => {
+    const years = new Set<string>();
+    data.forEach(row => years.add(row.datahora.slice(0, 4)));
+    return Array.from(years).sort();
+  }, [data]);
+
+  const yearQuickButtons = useMemo(() => {
+    const currentYear = new Date().getFullYear();
+    return [currentYear - 3, currentYear - 2, currentYear - 1, currentYear];
   }, []);
 
-  const handleDownloadExcel = useCallback(async () => {
-    if (!adminToken) return;
-    
-    setIsDownloadingExcel(true);
+  const isPendingRangeFullYear = (year: number): boolean => {
+    if (!pendingRange?.from || !pendingRange?.to) return false;
+    const expectedFrom = startOfYear(new Date(year, 0, 1));
+    const expectedTo = endOfYear(new Date(year, 0, 1));
+    return pendingRange.from.getTime() === expectedFrom.getTime() &&
+      pendingRange.to.getTime() === expectedTo.getTime();
+  };
+
+  const handleYearQuickSelect = (year: number) => {
+    const from = startOfYear(new Date(year, 0, 1));
+    const to = endOfYear(new Date(year, 0, 1));
+    setPendingRange({ from, to });
+  };
+
+  const formatPendingRangeHeader = (): string => {
+    if (!pendingRange?.from) return 'Totes les dates';
+    const fromStr = format(pendingRange.from, "d MMM yyyy", { locale: ca });
+    if (!pendingRange.to || pendingRange.to.getTime() === pendingRange.from.getTime()) return fromStr;
+    const toStr = format(pendingRange.to, "d MMM yyyy", { locale: ca });
+    return `${fromStr} – ${toStr}`;
+  };
+
+  const handleClearFilters = () => {
+    setSelectedNeighbourhood('all');
+    setDateRange(undefined);
+    setSelectedVehicleTypes([]);
+    setSelectedCameras([]);
+    setSelectedDeviceType('all');
+    setPendingRange(undefined);
+    setCalendarOpen(false);
+  };
+
+  const handleClearDateFilter = () => {
+    setPendingRange(undefined);
+    setDateRange(undefined);
+    setCalendarOpen(false);
+  };
+
+  const handleCalendarOpenChange = (open: boolean) => {
+    if (open) setPendingRange(dateRange);
+    setCalendarOpen(open);
+  };
+
+  const handleApplyDate = () => {
+    setDateRange(pendingRange);
+    setCalendarOpen(false);
+  };
+
+  const handleToggleVehicleType = (vehicleType: string) => {
+    setSelectedVehicleTypes(prev => 
+      prev.includes(vehicleType)
+        ? prev.filter(t => t !== vehicleType)
+        : [...prev, vehicleType]
+    );
+  };
+
+  const handleToggleCamera = (camera: string) => {
+    setSelectedCameras(prev => 
+      prev.includes(camera)
+        ? prev.filter(c => c !== camera)
+        : [...prev, camera]
+    );
+  };
+
+  const generatePDF = useCallback(async () => {
+    if (filteredData.length === 0) return;
+    setIsGeneratingPDF(true);
     try {
-      const response = await fetch('/api/export-excel', {
-        headers: { 'Authorization': `Bearer ${adminToken}` }
+      await generateAnalyticsReport({
+        filteredData,
+        chartData,
+        totalVehicles,
+        neighbourhoodAverages,
+        bollardReduction,
+        bollardSettings,
+        selectedNeighbourhood,
+        dateRange,
+        selectedVehicleTypes,
+        selectedCameras,
+        selectedDeviceType,
+        availableCameras,
+        cameraToNeighbourhood,
+        vehicleTypes: VEHICLE_TYPES,
+        chartRef,
+        attribution: ATTRIBUTION,
+        cornellaLogoSrc: cornellaLogo,
+        bollardImageSrc: bollardImage,
       });
-      
-      if (!response.ok) {
-        throw new Error('Error descarregant Excel');
-      }
-      
-      const blob = await response.blob();
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = url;
-      
-      const contentDisposition = response.headers.get('content-disposition');
-      const filenameMatch = contentDisposition?.match(/filename="(.+)"/);
-      const filename = filenameMatch ? filenameMatch[1] : `transit_cornella_${new Date().toISOString().slice(0, 10)}.xlsx`;
-      
-      link.download = filename;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      URL.revokeObjectURL(url);
-      
-      toast({
-        title: 'Descàrrega completada',
-        description: 'El fitxer Excel s\'ha descarregat correctament.',
-      });
-    } catch (err) {
-      toast({
-        title: 'Error',
-        description: err instanceof Error ? err.message : 'Error descarregant Excel',
-        variant: 'destructive',
-      });
+    } catch (error) {
+      console.error('Error generating PDF:', error);
     } finally {
-      setIsDownloadingExcel(false);
+      setIsGeneratingPDF(false);
     }
-  }, [adminToken, toast]);
+  }, [filteredData, chartData, totalVehicles, neighbourhoodAverages, bollardReduction, bollardSettings, selectedNeighbourhood, dateRange, selectedVehicleTypes, selectedCameras, selectedDeviceType, availableCameras, cameraToNeighbourhood]);
 
-  const handleDownload = useCallback(() => {
-    if (transformedData.length === 0) return;
-    
-    const csvContent = transformedRowsToCSV(transformedData);
-    const timestamp = new Date().toISOString().slice(0, 19).replace(/:/g, '-');
-    downloadCSV(csvContent, `vehicles_transformades_${timestamp}.csv`);
-    
-    setSuccess('Fitxer descarregat correctament!');
-    setTimeout(() => setSuccess(null), 3000);
-  }, [transformedData]);
 
-  const handleClearData = useCallback(async () => {
-    if (!adminToken) return;
-    
-    setIsClearing(true);
-    try {
-      const response = await fetch('/api/admin/clear-data', {
-        method: 'POST',
-        headers: { 'Authorization': `Bearer ${adminToken}` }
-      });
-      
-      if (!response.ok) throw new Error('Failed to clear data');
-      
-      const result = await response.json() as { deleted: number };
-      
-      toast({
-        title: 'Dades esborrades',
-        description: `S'han eliminat ${result.deleted.toLocaleString()} registres de la base de dades.`,
-      });
-      
-      queryClient.invalidateQueries({ queryKey: ['/api/traffic-data'] });
-      queryClient.invalidateQueries({ queryKey: ['/api/data-coverage'] });
-      queryClient.invalidateQueries({ queryKey: ['/api/detailed-data-coverage'] });
-      
-      setTransformedData([]);
-      setFile(null);
-      setSuccess(null);
-      setConfirmDeleteText('');
-    } catch (err) {
-      toast({
-        title: 'Error',
-        description: err instanceof Error ? err.message : 'Error esborrant les dades',
-        variant: 'destructive',
-      });
-    } finally {
-      setIsClearing(false);
-    }
-  }, [toast, adminToken]);
-
-  const handleRefreshData = useCallback(async () => {
-    if (!adminToken) return;
-    
-    setIsRefreshing(true);
-    try {
-      const response = await fetch('/api/admin/refresh-data', {
-        method: 'POST',
-        headers: { 'Authorization': `Bearer ${adminToken}` }
-      });
-      
-      if (!response.ok) throw new Error('Failed to refresh data');
-      
-      toast({
-        title: 'Dades actualitzades',
-        description: 'Les dades derivades s\'han recalculat correctament.',
-      });
-      
-      queryClient.invalidateQueries({ queryKey: ['/api/traffic-data'] });
-      queryClient.invalidateQueries({ queryKey: ['/api/data-coverage'] });
-      queryClient.invalidateQueries({ queryKey: ['/api/detailed-data-coverage'] });
-    } catch (err) {
-      toast({
-        title: 'Error',
-        description: err instanceof Error ? err.message : 'Error actualitzant les dades',
-        variant: 'destructive',
-      });
-    } finally {
-      setIsRefreshing(false);
-    }
-  }, [toast, adminToken]);
-
-  if (isCheckingAuth) {
+  if (isLoading) {
     return (
       <div className="min-h-screen bg-background flex items-center justify-center">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
+        <div className="text-center py-8">
+          <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
+          <p className="mt-4 text-sm text-muted-foreground">Carregant dades...</p>
+        </div>
       </div>
     );
   }
 
-  if (!adminToken) {
-    return <AdminLoginForm onLogin={(token) => setAdminToken(token)} />;
+  if (data.length === 0) {
+    return (
+      <div className="min-h-screen bg-background flex items-center justify-center">
+        <Card className="p-8 text-center">
+          <BarChart3 className="w-16 h-16 mx-auto mb-4 text-muted-foreground" />
+          <h2 className="text-xl font-semibold text-foreground mb-2">
+            No hi ha dades disponibles
+          </h2>
+          <p className="text-muted-foreground">
+            Primer transforma un fitxer CSV per veure les analítiques
+          </p>
+        </Card>
+      </div>
+    );
   }
 
   return (
     <div className="min-h-screen bg-background">
-      <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
-        <header className="mb-8 flex items-start justify-between gap-4">
-          <div>
-            <h1 className="text-3xl font-semibold text-foreground mb-2">
-              Secció administrador
-            </h1>
-            <p className="text-muted-foreground">
-              Gestiona les dades de trànsit, configuració de càmeres i paràmetres d'anàlisi. Puja fitxers CSV o Excel per afegir nous registres.
-            </p>
-          </div>
-          <Button 
-            variant="ghost" 
-            size="sm"
-            onClick={handleLogout}
-            className="gap-2"
-            data-testid="button-logout"
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        <header className="mb-4 flex items-center justify-between flex-wrap gap-3">
+          <h1 className="text-2xl font-semibold text-foreground">
+            Analítiques de Trànsit
+          </h1>
+          <Button
+            onClick={generatePDF}
+            disabled={filteredData.length === 0 || isGeneratingPDF}
+            data-testid="button-download-pdf"
           >
-            <LogOut className="w-4 h-4" />
-            Tancar sessió
+            {isGeneratingPDF ? (
+              <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Generant PDF...</>
+            ) : (
+              <><Download className="w-4 h-4 mr-2" />Descarrega informe PDF</>
+            )}
           </Button>
         </header>
 
-        <div className="space-y-8">
-          {!file ? (
-            <section>
-              <FileUploadZone onFileSelect={handleFileSelect} disabled={isProcessing} />
-            </section>
-          ) : (
-            <section>
-              <FileInfo
-                fileName={file.name}
-                fileSize={file.size}
-                onClear={handleClear}
-              />
-            </section>
-          )}
-
-          {error && (
-            <Alert variant="destructive">
-              <AlertCircle className="h-4 w-4" />
-              <AlertDescription data-testid="alert-error">{error}</AlertDescription>
-            </Alert>
-          )}
-
-          {success && (
-            <Alert className="border-green-500/50 bg-green-50 dark:bg-green-950/20">
-              <CheckCircle className="h-4 w-4 text-green-600 dark:text-green-400" />
-              <AlertDescription className="text-green-800 dark:text-green-200" data-testid="alert-success">
-                {success}
-              </AlertDescription>
-            </Alert>
-          )}
-
-          {importErrors.length > 0 && (
-            <Alert variant="destructive" className="bg-amber-50 dark:bg-amber-950/20 border-amber-500/50">
-              <AlertCircle className="h-4 w-4 text-amber-600" />
-              <AlertDescription className="text-amber-800 dark:text-amber-200">
-                <p className="font-medium mb-2">Advertències d'importació:</p>
-                <ul className="list-disc list-inside text-sm space-y-1">
-                  {importErrors.map((err, idx) => (
-                    <li key={idx}>{err}</li>
-                  ))}
-                </ul>
-                {importErrors.length === 10 && (
-                  <p className="text-xs mt-2 italic">Només es mostren les primeres 10 advertències.</p>
-                )}
-              </AlertDescription>
-            </Alert>
-          )}
-
-          {(isProcessing || isSaving) && (
-            <div className="text-center py-8">
-              <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
-              <p className="mt-4 text-sm text-muted-foreground">
-                {isProcessing
-                  ? 'Processant fitxer...'
-                  : uploadProgress
-                    ? `Pujant lot ${uploadProgress.current} de ${uploadProgress.total}...`
-                    : 'Preparant dades per pujar...'}
-              </p>
-              {isSaving && uploadProgress && (
-                <div className="mt-3 max-w-xs mx-auto">
-                  <div className="w-full bg-muted rounded-full h-2">
-                    <div
-                      className="bg-primary h-2 rounded-full transition-all duration-300"
-                      style={{ width: `${Math.round((uploadProgress.current / uploadProgress.total) * 100)}%` }}
-                    />
-                  </div>
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    {Math.round((uploadProgress.current / uploadProgress.total) * 100)}% completat
-                  </p>
-                </div>
-              )}
-            </div>
-          )}
-
-          {transformedData.length > 0 && !isProcessing && (
-            <>
-              <section>
-                <DataPreview data={transformedData} />
-              </section>
-
-              <section className="flex flex-wrap gap-4 justify-center">
-                <Button
-                  onClick={handleDownload}
-                  size="lg"
-                  className="gap-2"
-                  data-testid="button-download"
-                >
-                  <Download className="w-5 h-5" />
-                  Descarregar CSV Transformat
-                </Button>
-                
-                <Button
-                  variant="outline"
-                  onClick={handleClear}
-                  size="lg"
-                  className="gap-2"
-                  data-testid="button-reset"
-                >
-                  <RotateCcw className="w-4 h-4" />
-                  Reiniciar
-                </Button>
-              </section>
-            </>
-          )}
-
-          <section className="mt-12 pt-8 border-t border-border">
-            <div className="flex items-center gap-2 mb-4">
-              <Settings className="w-5 h-5" />
-              <h2 className="text-xl font-semibold text-foreground">
-                Accions d'administració
-              </h2>
-            </div>
+        <div className="space-y-4">
+          <Card className="p-4">
+            <h3 className="text-sm font-semibold text-foreground mb-3">Filtres</h3>
             
-            <div className="space-y-6">
-              <Card>
-                <CardHeader>
-                  <CardTitle className="text-lg">Assignació de càmeres a barris</CardTitle>
-                  <CardDescription>
-                    Configura quin barri correspon a cada càmera. Aquests canvis afectaran les analítiques.
-                  </CardDescription>
-                </CardHeader>
-                <CardContent>
-                  <CameraSettingsPanel token={adminToken} />
-                </CardContent>
-              </Card>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-7 gap-4">
+              <div className="space-y-2">
+                <label className="text-sm font-medium text-foreground">Barri</label>
+                <Select value={selectedNeighbourhood} onValueChange={setSelectedNeighbourhood}>
+                  <SelectTrigger data-testid="select-neighbourhood">
+                    <SelectValue placeholder="Selecciona barri" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">Tots els barris</SelectItem>
+                    {NEIGHBOURHOODS.map(neighbourhood => (
+                      <SelectItem key={neighbourhood} value={neighbourhood}>
+                        {neighbourhood}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
 
-              <div className="flex flex-wrap gap-4">
-                <Button
-                  onClick={handleDownloadExcel}
-                  disabled={isDownloadingExcel}
-                  className="gap-2"
-                  data-testid="button-download-excel"
-                >
-                  <FileSpreadsheet className={`w-4 h-4 ${isDownloadingExcel ? 'animate-pulse' : ''}`} />
-                  {isDownloadingExcel ? 'Descarregant...' : 'Descarregar dades'}
-                </Button>
+              <div className="space-y-2">
+                <label className="text-sm font-medium text-foreground">Tipus de dispositiu</label>
+                <Select value={selectedDeviceType} onValueChange={setSelectedDeviceType}>
+                  <SelectTrigger data-testid="select-device-type">
+                    <SelectValue placeholder="Tots els dispositius" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">Tots</SelectItem>
+                    <SelectItem value="Pilona">Pilona</SelectItem>
+                    <SelectItem value="Càmera">Càmera</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
 
-                <Button
-                  onClick={handleRefreshData}
-                  disabled={isRefreshing}
-                  className="gap-2 bg-green-600 text-white hover:bg-green-700"
-                  data-testid="button-refresh-data"
-                >
-                  <RefreshCw className={`w-4 h-4 ${isRefreshing ? 'animate-spin' : ''}`} />
-                  {isRefreshing ? 'Actualitzant...' : 'Actualitzar dades'}
-                </Button>
-
-                <AlertDialog>
-                  <AlertDialogTrigger asChild>
+              <div className="space-y-2">
+                <label className="text-sm font-medium text-foreground">Càmera</label>
+                <Popover>
+                  <PopoverTrigger asChild>
                     <Button
-                      variant="destructive"
-                      className="gap-2"
-                      disabled={isClearing}
-                      data-testid="button-clear-data"
+                      variant="outline"
+                      className="w-full justify-start text-left font-normal"
+                      data-testid="button-cameras"
                     >
-                      <Trash2 className="w-4 h-4" />
-                      {isClearing ? 'Esborrant...' : 'Esborra dades'}
+                      {selectedCameras.length === 0 ? (
+                        <span className="text-muted-foreground">Totes les càmeres</span>
+                      ) : selectedCameras.length === 1 ? (
+                        selectedCameras[0]
+                      ) : (
+                        `${selectedCameras.length} seleccionades`
+                      )}
                     </Button>
-                  </AlertDialogTrigger>
-                  <AlertDialogContent>
-                    <AlertDialogHeader>
-                      <AlertDialogTitle>Confirmar esborrat de dades</AlertDialogTitle>
-                      <AlertDialogDescription className="space-y-4">
-                        <p>
-                          Aquesta acció eliminarà <strong>TOTES</strong> les dades de trànsit de la base de dades.
-                          Les analítiques quedaran buides fins que es tornin a pujar dades.
-                        </p>
-                        <p className="text-destructive font-medium">
-                          Aquesta acció no es pot desfer.
-                        </p>
-                        <div className="pt-2">
-                          <Label htmlFor="confirm-delete">
-                            Escriu <strong>ESBORRAR</strong> per confirmar:
-                          </Label>
-                          <Input
-                            id="confirm-delete"
-                            value={confirmDeleteText}
-                            onChange={(e) => setConfirmDeleteText(e.target.value)}
-                            placeholder="ESBORRAR"
-                            className="mt-2"
-                            data-testid="input-confirm-delete"
+                  </PopoverTrigger>
+                  <PopoverContent className="w-[280px] p-4" align="start">
+                    <div className="space-y-3">
+                      <div className="font-medium text-sm">Selecciona càmeres</div>
+                      <div className="grid grid-cols-2 gap-2 max-h-64 overflow-y-auto">
+                        {availableCameras.map(camera => {
+                          const unreliable = UNRELIABLE_CAMERAS.has(camera);
+                          return (
+                            <div key={camera} className="flex items-center space-x-2">
+                              <Checkbox
+                                id={`camera-${camera}`}
+                                checked={selectedCameras.includes(camera)}
+                                onCheckedChange={() => handleToggleCamera(camera)}
+                                data-testid={`checkbox-camera-${camera}`}
+                              />
+                              <label
+                                htmlFor={`camera-${camera}`}
+                                className={`flex items-center gap-1 text-xs font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70 cursor-pointer ${unreliable ? 'text-red-600 dark:text-red-400' : ''}`}
+                              >
+                                <span>
+                                  {camera}
+                                  {cameraToNeighbourhood[camera] && (
+                                    <span className={`ml-1 ${unreliable ? 'text-red-400 dark:text-red-500' : 'text-muted-foreground'}`}>
+                                      ({cameraToNeighbourhood[camera].charAt(0)})
+                                    </span>
+                                  )}
+                                </span>
+                                {unreliable && (
+                                  <UITooltip>
+                                    <UITooltipTrigger asChild>
+                                      <AlertTriangle
+                                        className="h-3 w-3 text-red-500 dark:text-red-400 flex-shrink-0"
+                                        data-testid={`icon-unreliable-${camera}`}
+                                      />
+                                    </UITooltipTrigger>
+                                    <UITooltipContent className="max-w-[220px] text-xs" side="right">
+                                      {UNRELIABLE_CAMERA_MSG}
+                                    </UITooltipContent>
+                                  </UITooltip>
+                                )}
+                              </label>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  </PopoverContent>
+                </Popover>
+              </div>
+
+              <div className="space-y-2">
+                <label className="text-sm font-medium text-foreground">Tipus de vehicle</label>
+                <Popover>
+                  <PopoverTrigger asChild>
+                    <Button
+                      variant="outline"
+                      className="w-full justify-start text-left font-normal"
+                      data-testid="button-vehicle-types"
+                    >
+                      {selectedVehicleTypes.length === 0 ? (
+                        <span className="text-muted-foreground">Tots els tipus</span>
+                      ) : selectedVehicleTypes.length === 1 ? (
+                        selectedVehicleTypes[0]
+                      ) : (
+                        `${selectedVehicleTypes.length} seleccionats`
+                      )}
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent className="w-[240px] p-4" align="start">
+                    <div className="space-y-3">
+                      <div className="font-medium text-sm">Selecciona tipus de vehicle</div>
+                      {VEHICLE_TYPES.map(vehicleType => (
+                        <div key={vehicleType} className="flex items-center space-x-2">
+                          <Checkbox
+                            id={`vehicle-${vehicleType}`}
+                            checked={selectedVehicleTypes.includes(vehicleType)}
+                            onCheckedChange={() => handleToggleVehicleType(vehicleType)}
+                            data-testid={`checkbox-${vehicleType}`}
                           />
+                          <label
+                            htmlFor={`vehicle-${vehicleType}`}
+                            className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70 cursor-pointer"
+                          >
+                            {vehicleType}
+                          </label>
                         </div>
-                      </AlertDialogDescription>
-                    </AlertDialogHeader>
-                    <AlertDialogFooter>
-                      <AlertDialogCancel onClick={() => setConfirmDeleteText('')}>
-                        Cancel·lar
-                      </AlertDialogCancel>
-                      <AlertDialogAction
-                        onClick={handleClearData}
-                        disabled={confirmDeleteText !== 'ESBORRAR'}
-                        className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-                        data-testid="button-confirm-clear"
+                      ))}
+                    </div>
+                  </PopoverContent>
+                </Popover>
+              </div>
+
+              <div className="space-y-1.5 xl:col-span-2">
+                <label className="text-sm font-medium text-foreground">Data</label>
+                <Popover open={calendarOpen} onOpenChange={handleCalendarOpenChange}>
+                  <PopoverTrigger asChild>
+                    <Button
+                      variant="outline"
+                      className="w-full justify-start text-left font-normal"
+                      data-testid="button-date-range"
+                    >
+                      <CalendarIcon className="mr-2 h-4 w-4 shrink-0" />
+                      {dateRange?.from ? (
+                        dateRange.to ? (
+                          <span className="truncate">{format(dateRange.from, 'dd/MM/yyyy')} – {format(dateRange.to, 'dd/MM/yyyy')}</span>
+                        ) : (
+                          <span>{format(dateRange.from, 'dd/MM/yyyy')}</span>
+                        )
+                      ) : (
+                        <span className="text-muted-foreground">Totes les dates</span>
+                      )}
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent className="w-auto p-0 overflow-hidden" align="start">
+                    <div className="bg-primary text-primary-foreground px-4 py-3">
+                      <p className="text-xs font-medium uppercase tracking-wide opacity-80 mb-0.5">
+                        {pendingRange?.from && pendingRange?.to ? 'Interval seleccionat' : 'Rang de dates'}
+                      </p>
+                      <p className="text-base font-semibold" data-testid="text-pending-range-header">
+                        {formatPendingRangeHeader()}
+                      </p>
+                    </div>
+
+                    <div className="border-b px-3 py-2 flex gap-1.5">
+                      {yearQuickButtons.map(year => {
+                        const isActive = isPendingRangeFullYear(year);
+                        return (
+                          <button
+                            key={year}
+                            type="button"
+                            onClick={() => handleYearQuickSelect(year)}
+                            className={`flex-1 text-sm font-medium py-1 rounded-md border transition-colors ${
+                              isActive
+                                ? 'bg-primary text-primary-foreground border-primary'
+                                : 'border-border text-muted-foreground hover:text-foreground hover:border-foreground/40'
+                            }`}
+                            data-testid={`button-year-${year}`}
+                          >
+                            {year}
+                          </button>
+                        );
+                      })}
+                    </div>
+
+                    <Calendar
+                      mode="range"
+                      selected={pendingRange}
+                      onSelect={setPendingRange}
+                      numberOfMonths={2}
+                      captionLayout="dropdown"
+                      fromYear={availableYears.length > 0 ? parseInt(availableYears[0]) : 2023}
+                      toYear={availableYears.length > 0 ? parseInt(availableYears[availableYears.length - 1]) : new Date().getFullYear()}
+                      locale={ca}
+                      initialFocus
+                    />
+
+                    <div className="border-t px-3 py-2 flex items-center justify-between gap-2">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={handleClearDateFilter}
+                        data-testid="button-clear-date"
                       >
-                        Sí, esborra totes les dades
-                      </AlertDialogAction>
-                    </AlertDialogFooter>
-                  </AlertDialogContent>
-                </AlertDialog>
+                        Netejar
+                      </Button>
+                      <Button
+                        size="sm"
+                        onClick={handleApplyDate}
+                        data-testid="button-apply-date"
+                      >
+                        Aplicar
+                      </Button>
+                    </div>
+                  </PopoverContent>
+                </Popover>
+              </div>
+
+              <div className="flex items-end">
+                <Button
+                  variant="destructive"
+                  onClick={handleClearFilters}
+                  className="w-full"
+                  data-testid="button-clear-filters"
+                >
+                  Esborrar filtres
+                </Button>
               </div>
             </div>
-          </section>
+          </Card>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {(['Pedró', 'Gavarra'] as const).map(neighbourhood => {
+              const stats = neighbourhoodAverages[neighbourhood];
+              const reduction = bollardReduction[neighbourhood];
+              const bollardDate = neighbourhood === 'Pedró' 
+                ? bollardSettings?.bollardStartDatePedro 
+                : bollardSettings?.bollardStartDateGavarra;
+              const isBreakdownOpen = vehicleBreakdownOpen[neighbourhood] || false;
+              
+              const VehicleBreakdownGrid = ({ breakdown, color }: { breakdown: Record<string, number>; color: string }) => (
+                <div className="grid grid-cols-3 gap-x-2 gap-y-0.5 text-[10px] mt-1">
+                  {Object.entries(breakdown).sort().map(([vehicle, avg]) => (
+                    <div key={vehicle} className="flex justify-between gap-1">
+                      <span className="text-muted-foreground truncate">{vehicle}:</span>
+                      <span className="font-medium" style={{ color }}>{avg.toLocaleString()}</span>
+                    </div>
+                  ))}
+                </div>
+              );
+              
+              return (
+                <Card key={neighbourhood} className="p-3 flex flex-col">
+                  <div className="flex items-center justify-between mb-1">
+                    <h3 className="text-base font-semibold text-foreground">
+                      {neighbourhood}
+                    </h3>
+                    {bollardDate && (
+                      <span className="text-[10px] text-muted-foreground">
+                        Pilones: {bollardDate}
+                      </span>
+                    )}
+                  </div>
+                  
+                  <div className="space-y-1.5 flex-1">
+                    <div className="p-2 bg-blue-50 dark:bg-blue-950/30 rounded border-l-2 border-blue-500">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-xs text-muted-foreground">Laborables ({stats.workingDays}d)</span>
+                        <span className="text-sm font-bold text-foreground" data-testid={`avg-${neighbourhood.toLowerCase()}-working`}>
+                          {stats.workingAvg.toLocaleString()} v/d
+                        </span>
+                      </div>
+                      {isBreakdownOpen && <VehicleBreakdownGrid breakdown={stats.workingByVehicle} color={DAY_CATEGORY_COLORS.working} />}
+                    </div>
+                    
+                    <div className="p-2 bg-green-50 dark:bg-green-950/30 rounded border-l-2 border-green-500">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-xs text-muted-foreground">Festius baixats ({stats.holidayDownDays}d)</span>
+                        <span className="text-sm font-bold text-foreground" data-testid={`avg-${neighbourhood.toLowerCase()}-holiday-down`}>
+                          {stats.holidayDownAvg.toLocaleString()} v/d
+                        </span>
+                      </div>
+                      {isBreakdownOpen && <VehicleBreakdownGrid breakdown={stats.holidayDownByVehicle} color={DAY_CATEGORY_COLORS.holiday_down} />}
+                    </div>
+                    
+                    <div className="p-2 bg-red-50 dark:bg-red-950/30 rounded border-l-2 border-red-500">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-xs text-muted-foreground">Festius aixecats ({stats.holidayUpDays}d)</span>
+                        <span className="text-sm font-bold text-foreground" data-testid={`avg-${neighbourhood.toLowerCase()}-holiday-up`}>
+                          {stats.holidayUpAvg.toLocaleString()} v/d
+                        </span>
+                      </div>
+                      {isBreakdownOpen && <VehicleBreakdownGrid breakdown={stats.holidayUpByVehicle} color={DAY_CATEGORY_COLORS.holiday_up} />}
+                    </div>
+                    
+                    <div className="p-2 bg-primary/10 border border-primary/20 rounded flex items-center justify-between gap-2">
+                      <span className="text-xs text-muted-foreground">Reducció pilones</span>
+                      <span className="text-sm font-bold text-primary" data-testid={`reduction-${neighbourhood.toLowerCase()}`}>
+                        {reduction !== null ? `${reduction}%` : 'N/A'}
+                      </span>
+                    </div>
+                  </div>
+                  
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="mt-2 w-full h-6 text-xs"
+                    onClick={() => setVehicleBreakdownOpen(prev => ({ ...prev, [neighbourhood]: !prev[neighbourhood] }))}
+                    data-testid={`toggle-breakdown-${neighbourhood.toLowerCase()}`}
+                  >
+                    {isBreakdownOpen ? (
+                      <><ChevronDown className="w-3 h-3 mr-1" />Amagar detall vehicles</>
+                    ) : (
+                      <><ChevronRight className="w-3 h-3 mr-1" />Mostrar detall vehicles</>
+                    )}
+                  </Button>
+                </Card>
+              );
+            })}
+          </div>
+
+          <Card className="p-4">
+            <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+              <h3 className="text-base font-semibold text-foreground">
+                Total de Vehicles per Data
+              </h3>
+              <div className="flex items-center gap-4">
+                <div className="flex gap-3 text-xs flex-wrap">
+                  <div className="flex items-center gap-1">
+                    <div className="w-3 h-3 rounded" style={{ backgroundColor: DAY_CATEGORY_COLORS.working }}></div>
+                    <span className="text-muted-foreground">Laborables</span>
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <div className="w-3 h-3 rounded" style={{ backgroundColor: DAY_CATEGORY_COLORS.holiday_down }}></div>
+                    <span className="text-muted-foreground">Festius baixats</span>
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <div className="w-3 h-3 rounded" style={{ backgroundColor: DAY_CATEGORY_COLORS.holiday_up }}></div>
+                    <span className="text-muted-foreground">Festius aixecats</span>
+                  </div>
+                </div>
+                <div className="text-right">
+                  <span className="text-xs text-muted-foreground mr-2">Total:</span>
+                  <span className="text-lg font-bold text-primary" data-testid="text-total-vehicles">
+                    {totalVehicles.toLocaleString()}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            {chartData.length > 0 ? (
+              <div ref={chartRef}>
+                <ResponsiveContainer width="100%" height={280}>
+                  <BarChart data={chartData} margin={{ top: 10, right: 20, left: 10, bottom: 5 }}>
+                    <CartesianGrid strokeDasharray="3 3" className="stroke-border" />
+                    <XAxis 
+                      dataKey="displayDate" 
+                      angle={-45}
+                      textAnchor="end"
+                      height={80}
+                      className="text-xs"
+                      tick={{ fontSize: 10 }}
+                    />
+                    <YAxis className="text-xs" tick={{ fontSize: 10 }} />
+                    <Tooltip 
+                      contentStyle={{
+                        backgroundColor: 'hsl(var(--popover))',
+                        border: '1px solid hsl(var(--border))',
+                        borderRadius: '6px',
+                      }}
+                      formatter={(value: number, name: string) => {
+                        if (name === 'total') {
+                          return [value.toLocaleString() + ' vehicles', 'Total'];
+                        }
+                        return [value, name];
+                      }}
+                    />
+                    <Bar 
+                      dataKey="total" 
+                      radius={[4, 4, 0, 0]}
+                    >
+                      {chartData.map((entry, index) => (
+                        <Cell key={`cell-${index}`} fill={entry.fill} />
+                      ))}
+                    </Bar>
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            ) : (
+              <div className="text-center py-8 text-muted-foreground text-sm">
+                No hi ha dades per mostrar amb els filtres seleccionats
+              </div>
+            )}
+          </Card>
+
+          <Card className="p-3">
+            <div className="flex items-center justify-between flex-wrap gap-3">
+              <h3 className="text-sm font-semibold text-foreground">Resum</h3>
+              <div className="flex flex-wrap gap-4 text-xs">
+                <div className="flex items-center gap-1">
+                  <span className="text-muted-foreground">Registres:</span>
+                  <span className="font-semibold text-foreground" data-testid="text-filtered-records">
+                    {filteredData.length.toLocaleString()}
+                  </span>
+                </div>
+                <div className="flex items-center gap-1">
+                  <span className="text-muted-foreground">Dies:</span>
+                  <span className="font-semibold text-foreground">{chartData.length}</span>
+                </div>
+                <div className="flex items-center gap-1">
+                  <span className="text-muted-foreground">Barri:</span>
+                  <span className="font-semibold text-foreground">
+                    {selectedNeighbourhood === 'all' ? 'Tots' : selectedNeighbourhood}
+                  </span>
+                </div>
+                <div className="flex items-center gap-1">
+                  <span className="text-muted-foreground">Mitjana/dia:</span>
+                  <span className="font-semibold text-foreground">
+                    {chartData.length > 0 ? Math.round(totalVehicles / chartData.length).toLocaleString() : 0}
+                  </span>
+                </div>
+              </div>
+            </div>
+          </Card>
+
+          <DataCoverageTable 
+            selectedVehicleTypes={selectedVehicleTypes}
+            selectedNeighbourhood={selectedNeighbourhood}
+            selectedCameras={selectedCameras}
+            dateRange={dateRange}
+            cameraToNeighbourhood={cameraToNeighbourhood}
+          />
         </div>
       </div>
     </div>

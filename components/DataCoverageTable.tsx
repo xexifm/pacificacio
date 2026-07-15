@@ -9,6 +9,7 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/component
 import { format, isWeekend, getDay } from 'date-fns';
 import { ca } from 'date-fns/locale';
 import { isHoliday } from '@/lib/holidays';
+import { getDetailedDataCoverage, getBollardSettings, getCameraSettings } from '@/lib/dataStore';
 import { ChevronDown, ChevronUp } from 'lucide-react';
 
 interface DataCoverageDetail {
@@ -94,15 +95,18 @@ export default function DataCoverageTable({
   const [isOpen, setIsOpen] = useState(false);
 
   const { data: rawCoverage = [], isLoading } = useQuery<DataCoverageDetail[]>({
-    queryKey: ['/api/detailed-data-coverage'],
+    queryKey: ['detailed-data-coverage'],
+    queryFn: getDetailedDataCoverage,
   });
 
   const { data: bollardSettings } = useQuery<BollardSettings>({
-    queryKey: ['/api/bollard-settings'],
+    queryKey: ['bollard-settings'],
+    queryFn: getBollardSettings,
   });
 
   const { data: cameraSettings = [] } = useQuery<CameraSetting[]>({
-    queryKey: ['/api/camera-settings'],
+    queryKey: ['camera-settings'],
+    queryFn: getCameraSettings,
   });
 
   const cameraToNeighbourhood = useMemo(() => {
