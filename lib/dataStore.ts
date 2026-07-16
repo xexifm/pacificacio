@@ -72,10 +72,42 @@ async function fetchJson(path: string): Promise<unknown> {
   return res.json();
 }
 
+// Locally-saved settings override (from the Configuració "Guardar canvis" button).
+// Lets the admin apply changes on their device without a server; the committed
+// settings.json remains the public default until they download + commit it.
+const SETTINGS_OVERRIDE_KEY = "pacificacio-settings-override";
+
+function readOverride(): unknown | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const s = window.localStorage.getItem(SETTINGS_OVERRIDE_KEY);
+    return s ? JSON.parse(s) : null;
+  } catch {
+    return null;
+  }
+}
+
+export function saveSettingsOverride(raw: unknown): void {
+  if (typeof window === "undefined") return;
+  window.localStorage.setItem(SETTINGS_OVERRIDE_KEY, JSON.stringify(raw));
+  settingsPromise = null; // force re-read on next query
+}
+
+export function clearSettingsOverride(): void {
+  if (typeof window === "undefined") return;
+  window.localStorage.removeItem(SETTINGS_OVERRIDE_KEY);
+  settingsPromise = null;
+}
+
+export function hasSettingsOverride(): boolean {
+  return readOverride() !== null;
+}
+
 async function loadSettings(): Promise<RawSettings> {
   if (!settingsPromise) {
     settingsPromise = (async () => {
-      const json = await fetchJson("/data/settings.json");
+      const override = readOverride();
+      const json = override ?? (await fetchJson("/data/settings.json"));
       const parsed = rawSettingsSchema.safeParse(json);
       if (!parsed.success) {
         throw new Error(`settings.json invàlid: ${parsed.error.message}`);

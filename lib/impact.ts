@@ -9,21 +9,21 @@
 //   2. For each camera, average vehicles PER DAY (Σvalor / distinct days with
 //      data) so growing data coverage doesn't distort the comparison.
 //   3. Compare like-for-like day types:
-//        · "festiu" days — for a PILONA, the days its bollard is actually raised
-//          (from its configured schedule, ≥12h that day); for a CÀMERA (no
-//          bollard) the weekend+holiday days, used as a spatial control.
+//        · "festiu" (restriction) days — the days each point is under restriction
+//          per its configured schedule (raised bollard for a PILONA, camera-enforced
+//          restriction for a CÀMERA), counted when active ≥12h that day.
 //        · "working" days — a control that should barely change if the effect is
-//          really the bollards.
+//          really the restriction.
 //   4. A camera qualifies for a comparison only with enough days on both sides
 //      (MIN_DAYS_PER_SIDE).
 //   5. Barri figures sum the per-camera averages of qualifying reliable cameras,
-//      split by device type so the pilona effect and the camera (control) effect
-//      are separable.
+//      split by device type so the pilona effect and the camera (no physical
+//      barrier) effect are separable.
 //
 // Negative deltaPct = reduction (the intended effect).
 
 import { getDayType } from "@/lib/holidays";
-import { isUpDay, isWeekendOrHoliday, type SchedulesMap } from "@/lib/schedule";
+import { isUpDay, type SchedulesMap } from "@/lib/schedule";
 import type { TrafficData, CameraSettings } from "@/lib/types";
 
 export const MIN_DAYS_PER_SIDE = 10;
@@ -59,15 +59,15 @@ export interface CameraImpact {
   hasPilona: boolean;
   scheduleId: string;
   reliable: boolean;
-  festiu: Comparison | null; // pilona: up-days; càmera: weekend+holiday
+  festiu: Comparison | null; // restriction days per the point's schedule
   working: Comparison | null;
 }
 
 export interface NeighbourhoodImpact {
   neighbourhood: string;
   interventionDate: string;
-  pilona: DeviceComparison; // pilona cameras, on their up-days
-  camera: DeviceComparison; // càmera cameras, on weekend+holiday (control)
+  pilona: DeviceComparison; // pilona points, on their restriction days
+  camera: DeviceComparison; // càmera points (no barrier), on their restriction days
   working: DeviceComparison; // all eligible cameras, working days (control)
   camerasIncluded: string[];
   camerasExcluded: { camera: string; reason: "unreliable" | "insufficient-data" }[];
@@ -129,15 +129,14 @@ export function computeImpact(
     const date = row.datahora.slice(0, 10);
     const period: "before" | "after" = date < interventionDate ? "before" : "after";
 
-    // Which bucket does this day fall in for this camera?
+    // Which bucket does this day fall in for this camera? Every point (pilona OR
+    // càmera) now follows its configured restriction schedule for the "festiu" set.
     let bucket: Bucket | null;
     if (getDayType(new Date(`${date}T12:00:00.000Z`)) === "working") {
       bucket = "working";
-    } else if (hasPilonaOf(s)) {
-      const sched = schedules[s.scheduleId];
-      bucket = sched && isUpDay(sched.hours, date) ? "festiu" : null; // down weekend day → skip
     } else {
-      bucket = isWeekendOrHoliday(date) ? "festiu" : null;
+      const sched = schedules[s.scheduleId];
+      bucket = sched && isUpDay(sched.hours, date) ? "festiu" : null; // not-restricted festiu day → skip
     }
     if (!bucket) continue;
 

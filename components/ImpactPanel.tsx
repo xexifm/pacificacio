@@ -118,8 +118,8 @@ function NeighbourhoodCard({ n }: { n: NeighbourhoodImpact }) {
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
         <DeviceBlock
           icon={<Video className="w-3.5 h-3.5 text-muted-foreground" />}
-          title="Punts sense pilona"
-          subtitle="càmeres (control), festius"
+          title="Punts sense barrera"
+          subtitle="càmeres, dies de restricció"
           comp={n.camera}
         />
         <DeviceBlock
@@ -254,10 +254,10 @@ export default function ImpactPanel({ trafficData, cameraSettings, bollardSettin
 
       <p className="text-[10px] text-muted-foreground/80 mt-3 leading-relaxed">
         Metodologia: es comparen dies equivalents abans i després de l'activació, amb la mitjana de vehicles per dia
-        de cada punt (normalitza la cobertura). Als <strong>punts amb pilona</strong> es compten només els dies que
-        la barrera està aixecada segons el seu horari configurat; els <strong>punts sense pilona</strong> (càmeres)
-        serveixen de control per veure desviaments de trànsit. Només s'hi inclouen punts amb prou dies a banda i
-        banda. Resultats descriptius, no causals.
+        de cada punt (normalitza la cobertura). A cada punt es compten només els <strong>dies de restricció</strong>
+        segons el seu horari configurat (pilona aixecada o càmera activa); els <strong>punts sense barrera</strong>
+        (càmeres) permeten veure desviaments de trànsit respecte dels que tenen pilona. Només s'hi inclouen punts amb
+        prou dies a banda i banda. Resultats descriptius, no causals.
       </p>
     </Card>
   );

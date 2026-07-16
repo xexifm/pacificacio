@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -9,8 +9,11 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { Download, Info } from "lucide-react";
-import { getCameraSettings, getBollardSettings, getSchedules } from "@/lib/dataStore";
+import { Download, Info, Lock, Save, Check } from "lucide-react";
+import {
+  getCameraSettings, getBollardSettings, getSchedules,
+  saveSettingsOverride, clearSettingsOverride, hasSettingsOverride,
+} from "@/lib/dataStore";
 import {
   DAY_KEYS, DAY_LABELS, DEFAULT_SCHEDULES, scheduleSummary,
   type SchedulesMap, type NamedSchedule, type DayKey, type TimeRange,
@@ -20,7 +23,85 @@ import type { CameraSettings, BollardSettings } from "@/lib/types";
 const NEIGHBOURHOODS = ["Pedró", "Gavarra"];
 const DEVICE_TYPES = ["Pilona", "Càmera"];
 
+// Client-side gate. This is NOT server security (a static site can't have that);
+// it just keeps the config page out of casual reach so only the owner edits it.
+// No external server is involved — the password is checked in the browser and the
+// unlocked state is kept in sessionStorage for the tab's lifetime.
+const CONFIG_PASSWORD = "CORNELLA";
+const UNLOCK_KEY = "pacificacio-config-unlocked";
+
 export default function Configuracio() {
+  const [unlocked, setUnlocked] = useState(false);
+  const [checked, setChecked] = useState(false);
+
+  useEffect(() => {
+    try {
+      setUnlocked(sessionStorage.getItem(UNLOCK_KEY) === "1");
+    } catch {
+      /* sessionStorage unavailable */
+    }
+    setChecked(true);
+  }, []);
+
+  const handleUnlock = () => {
+    try {
+      sessionStorage.setItem(UNLOCK_KEY, "1");
+    } catch {
+      /* ignore */
+    }
+    setUnlocked(true);
+  };
+
+  if (!checked) return null;
+  if (!unlocked) return <PasswordGate onUnlock={handleUnlock} />;
+  return <ConfigEditor />;
+}
+
+function PasswordGate({ onUnlock }: { onUnlock: () => void }) {
+  const [value, setValue] = useState("");
+  const [error, setError] = useState(false);
+
+  const submit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (value === CONFIG_PASSWORD) {
+      onUnlock();
+    } else {
+      setError(true);
+    }
+  };
+
+  return (
+    <div className="min-h-screen bg-background flex items-center justify-center px-4">
+      <Card className="w-full max-w-sm">
+        <CardHeader className="text-center">
+          <div className="mx-auto mb-2 flex h-10 w-10 items-center justify-center rounded-full bg-primary/10">
+            <Lock className="h-5 w-5 text-primary" />
+          </div>
+          <CardTitle className="text-lg">Configuració protegida</CardTitle>
+          <CardDescription>Introdueix la contrasenya per accedir a la configuració.</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <form onSubmit={submit} className="space-y-3">
+            <Input
+              type="password"
+              autoFocus
+              value={value}
+              onChange={(e) => { setValue(e.target.value); setError(false); }}
+              placeholder="Contrasenya"
+              data-testid="input-config-password"
+              aria-invalid={error}
+            />
+            {error && <p className="text-sm text-destructive" data-testid="config-password-error">Contrasenya incorrecta.</p>}
+            <Button type="submit" className="w-full" data-testid="button-config-unlock">Entra</Button>
+          </form>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+function ConfigEditor() {
+  const queryClient = useQueryClient();
   const { data: cameraSettings = [], isLoading } = useQuery<CameraSettings[]>({
     queryKey: ["camera-settings"], queryFn: getCameraSettings,
   });
@@ -31,6 +112,8 @@ export default function Configuracio() {
   const [pedro, setPedro] = useState("");
   const [gavarra, setGavarra] = useState("");
   const [schedules, setSchedules] = useState<SchedulesMap>(DEFAULT_SCHEDULES);
+  const [saved, setSaved] = useState(false);
+  const [hasOverride, setHasOverride] = useState(false);
 
   useEffect(() => {
     if (cameraSettings.length > 0) setCameras(cameraSettings.map((c) => ({ ...c })));
@@ -43,6 +126,7 @@ export default function Configuracio() {
       setSchedules(JSON.parse(JSON.stringify(loadedSchedules)));
     }
   }, [loadedSchedules]);
+  useEffect(() => { setHasOverride(hasSettingsOverride()); }, []);
 
   const sortedCameras = useMemo(
     () => [...cameras].sort((a, b) => parseInt(a.cameraId.replace(/\D/g, "")) - parseInt(b.cameraId.replace(/\D/g, ""))),
@@ -59,20 +143,36 @@ export default function Configuracio() {
       [schedId]: { ...prev[schedId], hours: { ...prev[schedId].hours, [day]: range } },
     }));
 
+  const buildSettings = () => ({
+    cameras: sortedCameras.map((c) => ({
+      cameraId: c.cameraId,
+      displayName: c.displayName ?? null,
+      neighbourhood: c.neighbourhood,
+      cameraType: c.cameraType || "Càmera",
+      reliable: c.reliable !== false,
+      scheduleId: c.scheduleId || "generic",
+    })),
+    bollard: { bollardStartDatePedro: pedro || null, bollardStartDateGavarra: gavarra || null },
+    schedules,
+  });
+
+  const handleSave = () => {
+    saveSettingsOverride(buildSettings());
+    setHasOverride(true);
+    // Re-fetch everything that depends on settings so the dashboard reflects the change.
+    queryClient.invalidateQueries();
+    setSaved(true);
+    setTimeout(() => setSaved(false), 2500);
+  };
+
+  const handleReset = () => {
+    clearSettingsOverride();
+    setHasOverride(false);
+    queryClient.invalidateQueries();
+  };
+
   const handleDownload = () => {
-    const out = {
-      cameras: sortedCameras.map((c) => ({
-        cameraId: c.cameraId,
-        displayName: c.displayName ?? null,
-        neighbourhood: c.neighbourhood,
-        cameraType: c.cameraType || "Càmera",
-        reliable: c.reliable !== false,
-        scheduleId: c.scheduleId || "generic",
-      })),
-      bollard: { bollardStartDatePedro: pedro || null, bollardStartDateGavarra: gavarra || null },
-      schedules,
-    };
-    const blob = new Blob([JSON.stringify(out, null, 2)], { type: "application/json" });
+    const blob = new Blob([JSON.stringify(buildSettings(), null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url; link.download = "settings.json";
@@ -86,7 +186,7 @@ export default function Configuracio() {
         <header className="mb-6">
           <h1 className="text-2xl font-semibold text-foreground mb-2">Configuració</h1>
           <p className="text-muted-foreground text-sm">
-            Assignació de càmeres a barris, fiabilitat, dates d'activació i horaris de les pilones.
+            Assignació de càmeres a barris, fiabilitat, dates d'activació i horaris de restricció.
             Aquests valors afecten l'anàlisi d'impacte.
           </p>
         </header>
@@ -94,9 +194,11 @@ export default function Configuracio() {
         <Alert className="mb-6">
           <Info className="h-4 w-4" />
           <AlertDescription className="text-sm">
-            App estàtica: els canvis es descarreguen com a <code className="font-mono">settings.json</code>.
-            Substitueix <code className="font-mono">public/data/settings.json</code> al repositori amb el fitxer
-            descarregat i fes-hi commit — GitHub Pages es tornarà a desplegar sol.
+            Prem <strong>Guardar canvis</strong> per aplicar els canvis en aquest dispositiu (es desen al
+            navegador, sense servidors externs). Per fer-los públics per a tothom, prem
+            <strong> Descarrega settings.json</strong>, substitueix
+            <code className="font-mono"> public/data/settings.json</code> al repositori amb el fitxer
+            descarregat i fes-hi commit.
           </AlertDescription>
         </Alert>
 
@@ -109,8 +211,8 @@ export default function Configuracio() {
               <CardHeader>
                 <CardTitle className="text-lg">Punts de control (càmeres i pilones)</CardTitle>
                 <CardDescription>
-                  Barri, tipus de dispositiu, fiabilitat i, per a les pilones, l'horari que segueixen.
-                  Les no fiables s'exclouen dels indicadors de titular.
+                  Barri, tipus de dispositiu, fiabilitat i l'horari de restricció que segueix cada punt
+                  (pilones i càmeres). Les no fiables s'exclouen dels indicadors de titular.
                 </CardDescription>
               </CardHeader>
               <CardContent className="overflow-x-auto">
@@ -121,7 +223,7 @@ export default function Configuracio() {
                       <th className="text-center font-medium px-1">Fiable</th>
                       <th className="text-center font-medium px-1">Tipus</th>
                       <th className="text-center font-medium px-1">Barri</th>
-                      <th className="text-center font-medium px-1">Horari pilona</th>
+                      <th className="text-center font-medium px-1">Horari restricció</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -155,16 +257,12 @@ export default function Configuracio() {
                           </Select>
                         </td>
                         <td className="px-1 text-center">
-                          {cam.cameraType === "Pilona" ? (
-                            <Select value={cam.scheduleId || "generic"} onValueChange={(v) => updateCamera(cam.cameraId, { scheduleId: v })}>
-                              <SelectTrigger className="w-44 h-8" data-testid={`select-schedule-${cam.cameraId}`}><SelectValue /></SelectTrigger>
-                              <SelectContent>
-                                {scheduleIds.map((id) => <SelectItem key={id} value={id}>{schedules[id].label}</SelectItem>)}
-                              </SelectContent>
-                            </Select>
-                          ) : (
-                            <span className="text-xs text-muted-foreground">—</span>
-                          )}
+                          <Select value={cam.scheduleId || "generic"} onValueChange={(v) => updateCamera(cam.cameraId, { scheduleId: v })}>
+                            <SelectTrigger className="w-44 h-8" data-testid={`select-schedule-${cam.cameraId}`}><SelectValue /></SelectTrigger>
+                            <SelectContent>
+                              {scheduleIds.map((id) => <SelectItem key={id} value={id}>{schedules[id].label}</SelectItem>)}
+                            </SelectContent>
+                          </Select>
                         </td>
                       </tr>
                     ))}
@@ -196,11 +294,11 @@ export default function Configuracio() {
             {/* ── Schedules ── */}
             <Card>
               <CardHeader>
-                <CardTitle className="text-lg">Horaris de pilona (dies i hores)</CardTitle>
+                <CardTitle className="text-lg">Horaris de restricció (dies i hores)</CardTitle>
                 <CardDescription>
-                  Defineix, per a cada horari estàndard, els dies i les hores que la pilona està aixecada.
-                  Cada punt amb pilona n'utilitza un. Per a l'anàlisi (dades diàries), un dia compta com a
-                  "pilona amunt" si està aixecada 12h o més.
+                  Defineix, per a cada horari estàndard, els dies i les hores en què el punt està en
+                  restricció (pilona aixecada o càmera activa). Cada punt n'utilitza un. Per a l'anàlisi
+                  (dades diàries), un dia compta com a restringit si ho està 12h o més.
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-6">
@@ -216,11 +314,26 @@ export default function Configuracio() {
               </CardContent>
             </Card>
 
-            <div>
-              <Button onClick={handleDownload} className="gap-2" data-testid="button-download-settings">
+            <div className="flex flex-wrap items-center gap-3">
+              <Button onClick={handleSave} className="gap-2" data-testid="button-save-settings">
+                {saved ? <Check className="w-4 h-4" /> : <Save className="w-4 h-4" />}
+                {saved ? "Canvis guardats" : "Guardar canvis"}
+              </Button>
+              <Button onClick={handleDownload} variant="outline" className="gap-2" data-testid="button-download-settings">
                 <Download className="w-4 h-4" /> Descarrega settings.json
               </Button>
+              {hasOverride && (
+                <Button onClick={handleReset} variant="ghost" className="gap-2 text-muted-foreground" data-testid="button-reset-settings">
+                  Restaura els valors publicats
+                </Button>
+              )}
             </div>
+            {hasOverride && (
+              <p className="text-xs text-muted-foreground" data-testid="override-active-note">
+                Estàs veient canvis guardats localment en aquest navegador. La versió pública només canvia
+                quan descarregues el fitxer i el commit-eges al repositori.
+              </p>
+            )}
           </div>
         )}
       </div>

@@ -226,15 +226,15 @@ export async function generateExecutiveReport(input: ExecutiveReportInput): Prom
   function drawNeighbourhoodPage(p: typeof pdf, n: NeighbourhoodImpact) {
     pdf.setFontSize(9); pdf.setFont("helvetica", "italic"); sc(pdf, MUTED);
     pdf.text(`Mesures actives des del ${fmtDate(n.interventionDate)}. `
-      + `${n.pilona.camerasCount} pilones i ${n.camera.camerasCount} càmeres de control incloses. `
-      + `Els "punts amb pilona" es comparen només els dies que la barrera està aixecada; `
-      + `els "punts sense pilona" (càmeres) serveixen de control.`, M, yPos, { maxWidth: CW });
+      + `${n.pilona.camerasCount} pilones i ${n.camera.camerasCount} càmeres sense barrera incloses. `
+      + `A cada punt es comparen només els dies de restricció segons el seu horari; `
+      + `els "punts sense barrera" (càmeres) permeten veure desviaments de trànsit.`, M, yPos, { maxWidth: CW });
     yPos += 12; resetColor(p);
 
-    // Paired before/after bars: pilona (treatment), càmera (control), working.
+    // Paired before/after bars: pilona (barrier), càmera (no barrier), working control.
     const groups: { title: string; c: NeighbourhoodImpact["pilona"] }[] = [
-      { title: "Punts AMB pilona — dies amb barrera aixecada (efecte directe)", c: n.pilona },
-      { title: "Punts SENSE pilona — càmeres de control (festius)", c: n.camera },
+      { title: "Punts AMB pilona — dies de restricció (barrera física)", c: n.pilona },
+      { title: "Punts SENSE barrera — càmeres, dies de restricció", c: n.camera },
       { title: "Dies laborables — control", c: n.working },
     ];
     for (const g of groups) {
@@ -335,7 +335,7 @@ function buildConclusions(impact: { byNeighbourhood: NeighbourhoodImpact[] }): s
     if (n.camera.camerasCount > 0 && n.camera.deltaPct !== null) {
       const cv = deltaVerdict(n.camera.deltaPct);
       const ctxt = cv === "reduction" ? "també baixa" : cv === "increase" ? "puja (possible desviament)" : "es manté estable";
-      out.push(`   › Als punts sense pilona (càmeres de control) el trànsit ${ctxt} (${deltaStr(n.camera.deltaPct)}), fet que ajuda a distingir l'efecte directe de la barrera.`);
+      out.push(`   › Als punts sense barrera (càmeres) el trànsit ${ctxt} (${deltaStr(n.camera.deltaPct)}), fet que ajuda a distingir l'efecte directe de la barrera física.`);
     }
     if (n.working.deltaPct !== null) {
       const wv = deltaVerdict(n.working.deltaPct);
