@@ -52,6 +52,29 @@ const DEFAULT_BOLLARD = {
   bollardStartDateGavarra: "2025-03-01",
 };
 
+// Standardised pilona schedules (days + hours raised) from the municipal decree.
+const DEFAULT_SCHEDULES = {
+  generic: {
+    label: "Genèric (div. 20h + caps de setmana i festius)",
+    hours: {
+      fri: { from: "20:00", to: "23:59" },
+      sat: { from: "00:00", to: "23:59" },
+      sun: { from: "00:00", to: "23:59" },
+      holiday: { from: "00:00", to: "23:59" },
+    },
+  },
+  diumenges_festius: {
+    label: "Diumenges i festius",
+    hours: {
+      sun: { from: "00:00", to: "23:59" },
+      holiday: { from: "00:00", to: "23:59" },
+    },
+  },
+};
+// Cameras on the "Sundays + holidays" schedule (Miranda, the two Cornellà Modern,
+// Domènech i Montaner); all other pilonas use the generic schedule.
+const SCHEDULE_BY_CAMERA = { CT11: "diumenges_festius", CT16: "diumenges_festius", CT17: "diumenges_festius", CT18: "diumenges_festius" };
+
 const CAMERA_DISPLAY_NAMES = {
   CT10: "c/de Maria Benlliure",
   CT11: "c/Joan Fernández i Comas amb c/Lluís Domènech i Montaner",
@@ -141,8 +164,10 @@ function main() {
         neighbourhood: DEFAULT_CAMERA_MAPPINGS[cameraId],
         cameraType: DEFAULT_CAMERA_TYPES[cameraId] ?? "Càmera",
         reliable: !UNRELIABLE_CAMERAS.has(cameraId),
+        scheduleId: SCHEDULE_BY_CAMERA[cameraId] ?? "generic",
       })),
     bollard: { ...DEFAULT_BOLLARD },
+    schedules: DEFAULT_SCHEDULES,
   };
 
   mkdirSync(OUT_DIR, { recursive: true });

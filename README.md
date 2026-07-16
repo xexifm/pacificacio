@@ -113,8 +113,19 @@ Dos informes PDF (botons a la capçalera):
 - **Informe detallat** (`lib/pdfReport.ts`) — l'informe complet amb l'annex de
   cobertura dia a dia.
 
-La **fiabilitat** de cada càmera i les **dates d'activació** s'editen a la pàgina
-*Configuració* (es descarrega `settings.json` per fer-hi commit).
+La **fiabilitat** de cada càmera, les **dates d'activació** i els **horaris de les
+pilones** s'editen a la pàgina *Configuració* (es descarrega `settings.json` per
+fer-hi commit).
+
+### Pilona vs càmera i horaris
+
+L'anàlisi distingeix els **punts amb pilona** (barrera física) dels **punts sense
+pilona** (càmeres de monitoratge, que actuen de control per detectar desviaments).
+Cada pilona segueix un **horari** (`lib/schedule.ts`) que defineix, per dia de la
+setmana i festius, les hores que està aixecada; com que les dades són diàries, un
+dia compta com a "pilona amunt" si està aixecada ≥12 h. Els horaris estàndard
+(genèric = div. 20 h + caps de setmana i festius; diumenges i festius) es defineixen
+un cop i s'assignen per càmera, tot editable a *Configuració*.
 
 ## Notes
 

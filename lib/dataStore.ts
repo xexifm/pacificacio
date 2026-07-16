@@ -10,6 +10,7 @@
 import { z } from "zod";
 import { asset } from "@/lib/paths";
 import { computeDetailedCoverage } from "@/lib/analytics";
+import { DEFAULT_SCHEDULES, type SchedulesMap } from "@/lib/schedule";
 import type {
   TrafficData,
   CameraSettings,
@@ -34,6 +35,12 @@ const rawTrafficSchema = z.object({
   rows: z.array(z.tuple([z.string(), z.string(), z.string(), z.number()])),
 });
 
+const timeRangeSchema = z.object({ from: z.string(), to: z.string() });
+const namedScheduleSchema = z.object({
+  label: z.string(),
+  hours: z.record(z.string(), timeRangeSchema.nullable()),
+});
+
 const rawSettingsSchema = z.object({
   cameras: z.array(
     z.object({
@@ -41,14 +48,16 @@ const rawSettingsSchema = z.object({
       displayName: z.string().nullable(),
       neighbourhood: z.string(),
       cameraType: z.string(),
-      // Older settings files may omit this; default to trustworthy.
+      // Older settings files may omit these; sensible defaults keep them valid.
       reliable: z.boolean().default(true),
+      scheduleId: z.string().default("generic"),
     }),
   ),
   bollard: z.object({
     bollardStartDatePedro: z.string().nullable(),
     bollardStartDateGavarra: z.string().nullable(),
   }),
+  schedules: z.record(z.string(), namedScheduleSchema).optional(),
 });
 
 type RawSettings = z.infer<typeof rawSettingsSchema>;
@@ -120,6 +129,12 @@ export async function getCameraSettings(): Promise<CameraSettings[]> {
 export async function getBollardSettings(): Promise<BollardSettings> {
   const settings = await loadSettings();
   return settings.bollard;
+}
+
+export async function getSchedules(): Promise<SchedulesMap> {
+  const settings = await loadSettings();
+  // Fall back to the built-in defaults when the file omits schedules.
+  return (settings.schedules as SchedulesMap) ?? DEFAULT_SCHEDULES;
 }
 
 // Equivalent of the former storage.getDetailedDataCoverage(): one entry per

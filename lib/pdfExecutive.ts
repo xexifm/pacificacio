@@ -10,12 +10,14 @@ import {
   drawPageFooter, drawSectionHeader, drawKPICard,
 } from "@/lib/pdfHelpers";
 import { computeImpact, deltaVerdict, MIN_DAYS_PER_SIDE, type NeighbourhoodImpact } from "@/lib/impact";
+import type { SchedulesMap } from "@/lib/schedule";
 import type { TrafficData, CameraSettings, BollardSettings } from "@/lib/types";
 
 export interface ExecutiveReportInput {
   trafficData: TrafficData[];
   cameraSettings: CameraSettings[];
   bollardSettings?: BollardSettings;
+  schedules: SchedulesMap;
   attribution: string;
   escutSrc: string;
 }
@@ -43,13 +45,13 @@ function monthLabel(key: string): string {
 }
 
 export async function generateExecutiveReport(input: ExecutiveReportInput): Promise<void> {
-  const { trafficData, cameraSettings, bollardSettings, attribution, escutSrc } = input;
+  const { trafficData, cameraSettings, bollardSettings, schedules, attribution, escutSrc } = input;
 
   const dates: Record<string, string | null> = {
     "Pedró": bollardSettings?.bollardStartDatePedro ?? null,
     "Gavarra": bollardSettings?.bollardStartDateGavarra ?? null,
   };
-  const impact = computeImpact(trafficData, cameraSettings, dates, { reliableOnly: true });
+  const impact = computeImpact(trafficData, cameraSettings, schedules, dates, { reliableOnly: true });
 
   const reliableSet = new Set(cameraSettings.filter((c) => c.reliable !== false).map((c) => c.cameraId));
 
@@ -162,12 +164,12 @@ export async function generateExecutiveReport(input: ExecutiveReportInput): Prom
   const globalWorking = workingDeltas.length ? workingDeltas.reduce((a, b) => a + b, 0) / workingDeltas.length : null;
 
   const cardW = (CW - 8) / 2, cardH = 46;
-  drawKPICard(pdf, M, yPos, cardW, cardH, "FESTIUS · PEDRÓ (efecte pilones)",
-    pedro ? deltaStr(pedro.holiday.deltaPct) : "N/D", pedro ? deltaColor(pedro.holiday.deltaPct) : MUTED,
-    pedro ? `${fmt(pedro.holiday.before.avgPerDay)} → ${fmt(pedro.holiday.after.avgPerDay)} v/dia` : "sense dades");
-  drawKPICard(pdf, M + cardW + 8, yPos, cardW, cardH, "FESTIUS · GAVARRA (efecte pilones)",
-    gavarra ? deltaStr(gavarra.holiday.deltaPct) : "N/D", gavarra ? deltaColor(gavarra.holiday.deltaPct) : MUTED,
-    gavarra ? `${fmt(gavarra.holiday.before.avgPerDay)} → ${fmt(gavarra.holiday.after.avgPerDay)} v/dia` : "sense dades");
+  drawKPICard(pdf, M, yPos, cardW, cardH, "PILONES · PEDRÓ (dies amb barrera)",
+    pedro ? deltaStr(pedro.pilona.deltaPct) : "N/D", pedro ? deltaColor(pedro.pilona.deltaPct) : MUTED,
+    pedro ? `${fmt(pedro.pilona.before.avgPerDay)} → ${fmt(pedro.pilona.after.avgPerDay)} v/dia` : "sense dades");
+  drawKPICard(pdf, M + cardW + 8, yPos, cardW, cardH, "PILONES · GAVARRA (dies amb barrera)",
+    gavarra ? deltaStr(gavarra.pilona.deltaPct) : "N/D", gavarra ? deltaColor(gavarra.pilona.deltaPct) : MUTED,
+    gavarra ? `${fmt(gavarra.pilona.before.avgPerDay)} → ${fmt(gavarra.pilona.after.avgPerDay)} v/dia` : "sense dades");
   yPos += cardH + 8;
   drawKPICard(pdf, M, yPos, cardW, cardH, "LABORABLES (mitjana dels barris)",
     globalWorking !== null ? deltaStr(globalWorking) : "N/D", globalWorking !== null ? deltaColor(globalWorking) : MUTED,
@@ -224,15 +226,16 @@ export async function generateExecutiveReport(input: ExecutiveReportInput): Prom
   function drawNeighbourhoodPage(p: typeof pdf, n: NeighbourhoodImpact) {
     pdf.setFontSize(9); pdf.setFont("helvetica", "italic"); sc(pdf, MUTED);
     pdf.text(`Mesures actives des del ${fmtDate(n.interventionDate)}. `
-      + `${n.holiday.before.days} dies festius i ${n.working.before.days} laborables abans; `
-      + `${n.holiday.after.days} i ${n.working.after.days} després. `
-      + `${n.camerasIncluded.length} càmeres incloses.`, M, yPos, { maxWidth: CW });
-    yPos += 10; resetColor(p);
+      + `${n.pilona.camerasCount} pilones i ${n.camera.camerasCount} càmeres de control incloses. `
+      + `Els "punts amb pilona" es comparen només els dies que la barrera està aixecada; `
+      + `els "punts sense pilona" (càmeres) serveixen de control.`, M, yPos, { maxWidth: CW });
+    yPos += 12; resetColor(p);
 
-    // Paired before/after bars for holiday and working (total).
-    const groups: { title: string; c: NeighbourhoodImpact["holiday"] }[] = [
-      { title: "Dies festius (efecte de les pilones)", c: n.holiday },
-      { title: "Dies laborables", c: n.working },
+    // Paired before/after bars: pilona (treatment), càmera (control), working.
+    const groups: { title: string; c: NeighbourhoodImpact["pilona"] }[] = [
+      { title: "Punts AMB pilona — dies amb barrera aixecada (efecte directe)", c: n.pilona },
+      { title: "Punts SENSE pilona — càmeres de control (festius)", c: n.camera },
+      { title: "Dies laborables — control", c: n.working },
     ];
     for (const g of groups) {
       needPage(40);
@@ -252,11 +255,11 @@ export async function generateExecutiveReport(input: ExecutiveReportInput): Prom
       resetColor(p); yPos += 9;
     }
 
-    // Vehicle breakdown table (holiday).
+    // Vehicle breakdown table (pilona up-days).
     yPos += 2;
-    needPage(10 + Object.keys(n.holiday.byVehicleDelta).length * 6);
+    needPage(10 + Object.keys(n.pilona.byVehicleDelta).length * 6);
     pdf.setFontSize(10); pdf.setFont("helvetica", "bold"); sc(pdf, NAVY);
-    pdf.text("Desglossament per tipus de vehicle (dies festius)", M, yPos); yPos += 6; resetColor(p);
+    pdf.text("Desglossament per tipus de vehicle (punts amb pilona)", M, yPos); yPos += 6; resetColor(p);
 
     const cols = [55, 40, 40, 40];
     sf(p, [228, 234, 248]); pdf.rect(M, yPos, CW, 7, "F");
@@ -266,7 +269,7 @@ export async function generateExecutiveReport(input: ExecutiveReportInput): Prom
       pdf.text(h, x, yPos + 5);
     });
     yPos += 7;
-    const vehicles = Object.entries(n.holiday.byVehicleDelta).sort((a, b) => b[1].before - a[1].before);
+    const vehicles = Object.entries(n.pilona.byVehicleDelta).sort((a, b) => b[1].before - a[1].before);
     vehicles.forEach(([v, d], i) => {
       if (i % 2 === 0) { sf(p, [247, 249, 254]); pdf.rect(M, yPos, CW, 6.5, "F"); }
       pdf.setFontSize(8); pdf.setFont("helvetica", "normal"); sc(pdf, [48, 58, 82]);
@@ -310,28 +313,34 @@ function buildConclusions(impact: { byNeighbourhood: NeighbourhoodImpact[] }): s
     return ["No hi ha prou dades ni dates d'activació configurades per avaluar l'impacte de les mesures."];
   }
   for (const n of impact.byNeighbourhood) {
-    const v = deltaVerdict(n.holiday.deltaPct);
-    const abs = n.holiday.deltaPct !== null ? Math.abs(n.holiday.deltaPct).toFixed(1) : "";
-    const range = `${fmt(n.holiday.before.avgPerDay)} → ${fmt(n.holiday.after.avgPerDay)} vehicles/dia`;
+    const v = deltaVerdict(n.pilona.deltaPct);
+    const abs = n.pilona.deltaPct !== null ? Math.abs(n.pilona.deltaPct).toFixed(1) : "";
+    const range = `${fmt(n.pilona.before.avgPerDay)} → ${fmt(n.pilona.after.avgPerDay)} vehicles/dia`;
     if (v === "reduction") {
-      out.push(`Al barri de ${n.neighbourhood}, el trànsit en dies festius s'ha reduït un ${abs}% coincidint amb l'activació de les mesures (${range}).`);
+      out.push(`Al barri de ${n.neighbourhood}, als punts amb pilona el trànsit els dies amb barrera aixecada s'ha reduït un ${abs}% coincidint amb l'activació de les mesures (${range}).`);
     } else if (v === "increase") {
-      out.push(`Al barri de ${n.neighbourhood}, el trànsit en dies festius ha augmentat un ${abs}% respecte al període anterior (${range}).`);
+      out.push(`Al barri de ${n.neighbourhood}, als punts amb pilona el trànsit ha augmentat un ${abs}% respecte al període anterior (${range}).`);
     } else if (v === "no-change") {
-      out.push(`Al barri de ${n.neighbourhood}, el trànsit en dies festius s'ha mantingut pràcticament estable (${deltaStr(n.holiday.deltaPct)}).`);
+      out.push(`Al barri de ${n.neighbourhood}, als punts amb pilona el trànsit s'ha mantingut pràcticament estable (${deltaStr(n.pilona.deltaPct)}).`);
     } else {
-      out.push(`Al barri de ${n.neighbourhood} no hi ha prou dades comparables per quantificar l'efecte en dies festius.`);
+      out.push(`Al barri de ${n.neighbourhood} no hi ha prou dades comparables per quantificar l'efecte de les pilones.`);
     }
-    const cotxes = n.holiday.byVehicleDelta["Cotxe"];
+    const cotxes = n.pilona.byVehicleDelta["Cotxe"];
     if (cotxes && cotxes.deltaPct !== null) {
       const cv = deltaVerdict(cotxes.deltaPct);
-      if (cv === "reduction") out.push(`   › En concret, els cotxes en festius a ${n.neighbourhood} han baixat un ${Math.abs(cotxes.deltaPct).toFixed(1)}%.`);
-      else if (cv === "increase") out.push(`   › Els cotxes en festius a ${n.neighbourhood} han pujat un ${cotxes.deltaPct.toFixed(1)}%.`);
+      if (cv === "reduction") out.push(`   › En concret, els cotxes als punts amb pilona han baixat un ${Math.abs(cotxes.deltaPct).toFixed(1)}%.`);
+      else if (cv === "increase") out.push(`   › Els cotxes als punts amb pilona han pujat un ${cotxes.deltaPct.toFixed(1)}%.`);
+    }
+    // Contrast with the control points (cameras without a bollard).
+    if (n.camera.camerasCount > 0 && n.camera.deltaPct !== null) {
+      const cv = deltaVerdict(n.camera.deltaPct);
+      const ctxt = cv === "reduction" ? "també baixa" : cv === "increase" ? "puja (possible desviament)" : "es manté estable";
+      out.push(`   › Als punts sense pilona (càmeres de control) el trànsit ${ctxt} (${deltaStr(n.camera.deltaPct)}), fet que ajuda a distingir l'efecte directe de la barrera.`);
     }
     if (n.working.deltaPct !== null) {
       const wv = deltaVerdict(n.working.deltaPct);
       const wtxt = wv === "reduction" ? "una reducció" : wv === "increase" ? "un augment" : "estabilitat";
-      out.push(`   › En dies laborables, ${n.neighbourhood} mostra ${wtxt} del ${deltaStr(n.working.deltaPct)}.`);
+      out.push(`   › En dies laborables (control) el barri mostra ${wtxt} del ${deltaStr(n.working.deltaPct)}.`);
     }
   }
   return out;
@@ -341,8 +350,8 @@ function drawCameraTable(
   pdf: any, cameras: any[], startY: number, addPage: () => void, needPage: (n: number) => void,
 ): number {
   let yPos = startY;
-  const cols = [16, 62, 22, 34, 22, 24]; // Càmera, Ubicació, Barri, Festius Δ, Laborables Δ, Fiable
-  const headers = ["Càmera", "Ubicació", "Barri", "Δ festius", "Δ laborables", "Fiable"];
+  const cols = [15, 50, 18, 22, 28, 27, 20]; // Punt, Ubicació, Barri, Tipus, Δ festius, Δ laborables, Fiable
+  const headers = ["Punt", "Ubicació", "Barri", "Tipus", "Δ festius", "Δ laborables", "Fiable"];
 
   const drawHeader = () => {
     sf(pdf, [228, 234, 248]); pdf.rect(M, yPos, CW, 7, "F");
@@ -366,12 +375,13 @@ function drawCameraTable(
     const loc = (c.displayName ?? "—").slice(0, 42);
     pdf.text(loc, x, yPos + 4.5); x += cols[1];
     pdf.text(c.neighbourhood, x, yPos + 4.5); x += cols[2];
+    pdf.text(c.hasPilona ? "Pilona" : "Càmera", x, yPos + 4.5); x += cols[3];
     // deltas
-    const hd = c.holiday ? deltaStr(c.holiday.deltaPct) : "—";
+    const hd = c.festiu ? deltaStr(c.festiu.deltaPct) : "—";
     const wd = c.working ? deltaStr(c.working.deltaPct) : "—";
     pdf.setFont("helvetica", "bold");
-    sc(pdf, c.holiday && c.reliable ? deltaColor(c.holiday.deltaPct) : dim); pdf.text(hd, x, yPos + 4.5); x += cols[3];
-    sc(pdf, c.working && c.reliable ? deltaColor(c.working.deltaPct) : dim); pdf.text(wd, x, yPos + 4.5); x += cols[4];
+    sc(pdf, c.festiu && c.reliable ? deltaColor(c.festiu.deltaPct) : dim); pdf.text(hd, x, yPos + 4.5); x += cols[4];
+    sc(pdf, c.working && c.reliable ? deltaColor(c.working.deltaPct) : dim); pdf.text(wd, x, yPos + 4.5); x += cols[5];
     pdf.setFont("helvetica", "normal"); sc(pdf, c.reliable ? GREEN : [180, 130, 20]);
     pdf.text(c.reliable ? "Sí" : "No", x, yPos + 4.5);
     resetColor(pdf);

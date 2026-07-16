@@ -1,106 +1,40 @@
 {
   "cameras": [
-    {
-      "cameraId": "CT10",
-      "displayName": "c/de Maria Benlliure",
-      "neighbourhood": "Pedró",
-      "cameraType": "Pilona",
-      "reliable": true
-    },
-    {
-      "cameraId": "CT11",
-      "displayName": "c/Joan Fernández i Comas amb c/Lluís Domènech i Montaner",
-      "neighbourhood": "Pedró",
-      "cameraType": "Pilona",
-      "reliable": true
-    },
-    {
-      "cameraId": "CT12",
-      "displayName": "c/Feliu i Codina",
-      "neighbourhood": "Pedró",
-      "cameraType": "Pilona",
-      "reliable": true
-    },
-    {
-      "cameraId": "CT13",
-      "displayName": "c/Ignasi Iglesias",
-      "neighbourhood": "Pedró",
-      "cameraType": "Pilona",
-      "reliable": false
-    },
-    {
-      "cameraId": "CT14",
-      "displayName": "c/Iscle Soler",
-      "neighbourhood": "Pedró",
-      "cameraType": "Càmera",
-      "reliable": true
-    },
-    {
-      "cameraId": "CT15",
-      "displayName": "c/Josep Fiter",
-      "neighbourhood": "Pedró",
-      "cameraType": "Càmera",
-      "reliable": false
-    },
-    {
-      "cameraId": "CT16",
-      "displayName": "c/Doctor Ferran amb c/Cornella Modern",
-      "neighbourhood": "Gavarra",
-      "cameraType": "Pilona",
-      "reliable": false
-    },
-    {
-      "cameraId": "CT17",
-      "displayName": "c/Orioles amb c/Cornella Modern",
-      "neighbourhood": "Gavarra",
-      "cameraType": "Pilona",
-      "reliable": false
-    },
-    {
-      "cameraId": "CT18",
-      "displayName": "c/Miranda",
-      "neighbourhood": "Gavarra",
-      "cameraType": "Pilona",
-      "reliable": true
-    },
-    {
-      "cameraId": "CT19",
-      "displayName": "c/Ermengol Goula (Av. del Parc)",
-      "neighbourhood": "Gavarra",
-      "cameraType": "Pilona",
-      "reliable": true
-    },
-    {
-      "cameraId": "CT20",
-      "displayName": "c/Palma Mallorca (Av. Del Parc)",
-      "neighbourhood": "Gavarra",
-      "cameraType": "Càmera",
-      "reliable": true
-    },
-    {
-      "cameraId": "CT21",
-      "displayName": "Av. Republica Argentina",
-      "neighbourhood": "Gavarra",
-      "cameraType": "Càmera",
-      "reliable": false
-    },
-    {
-      "cameraId": "CT22",
-      "displayName": "c/Mossèn Andreu amb c/dels Catalans",
-      "neighbourhood": "Gavarra",
-      "cameraType": "Càmera",
-      "reliable": false
-    },
-    {
-      "cameraId": "CT23",
-      "displayName": "c/Mossèn Andreu amb c/Jacinto Guerrero",
-      "neighbourhood": "Gavarra",
-      "cameraType": "Càmera",
-      "reliable": false
-    }
+    { "cameraId": "CT10", "displayName": "c/de Maria Benlliure", "neighbourhood": "Pedró", "cameraType": "Pilona", "reliable": true, "scheduleId": "generic" },
+    { "cameraId": "CT11", "displayName": "c/Joan Fernández i Comas amb c/Lluís Domènech i Montaner", "neighbourhood": "Pedró", "cameraType": "Pilona", "reliable": true, "scheduleId": "diumenges_festius" },
+    { "cameraId": "CT12", "displayName": "c/Feliu i Codina", "neighbourhood": "Pedró", "cameraType": "Pilona", "reliable": true, "scheduleId": "generic" },
+    { "cameraId": "CT13", "displayName": "c/Ignasi Iglesias", "neighbourhood": "Pedró", "cameraType": "Pilona", "reliable": false, "scheduleId": "generic" },
+    { "cameraId": "CT14", "displayName": "c/Iscle Soler", "neighbourhood": "Pedró", "cameraType": "Càmera", "reliable": true, "scheduleId": "generic" },
+    { "cameraId": "CT15", "displayName": "c/Josep Fiter", "neighbourhood": "Pedró", "cameraType": "Càmera", "reliable": false, "scheduleId": "generic" },
+    { "cameraId": "CT16", "displayName": "c/Doctor Ferran amb c/Cornella Modern", "neighbourhood": "Gavarra", "cameraType": "Pilona", "reliable": false, "scheduleId": "diumenges_festius" },
+    { "cameraId": "CT17", "displayName": "c/Orioles amb c/Cornella Modern", "neighbourhood": "Gavarra", "cameraType": "Pilona", "reliable": false, "scheduleId": "diumenges_festius" },
+    { "cameraId": "CT18", "displayName": "c/Miranda", "neighbourhood": "Gavarra", "cameraType": "Pilona", "reliable": true, "scheduleId": "diumenges_festius" },
+    { "cameraId": "CT19", "displayName": "c/Ermengol Goula (Av. del Parc)", "neighbourhood": "Gavarra", "cameraType": "Pilona", "reliable": true, "scheduleId": "generic" },
+    { "cameraId": "CT20", "displayName": "c/Palma Mallorca (Av. Del Parc)", "neighbourhood": "Gavarra", "cameraType": "Càmera", "reliable": true, "scheduleId": "generic" },
+    { "cameraId": "CT21", "displayName": "Av. Republica Argentina", "neighbourhood": "Gavarra", "cameraType": "Càmera", "reliable": false, "scheduleId": "generic" },
+    { "cameraId": "CT22", "displayName": "c/Mossèn Andreu amb c/dels Catalans", "neighbourhood": "Gavarra", "cameraType": "Càmera", "reliable": false, "scheduleId": "generic" },
+    { "cameraId": "CT23", "displayName": "c/Mossèn Andreu amb c/Jacinto Guerrero", "neighbourhood": "Gavarra", "cameraType": "Càmera", "reliable": false, "scheduleId": "generic" }
   ],
   "bollard": {
     "bollardStartDatePedro": "2025-04-25",
     "bollardStartDateGavarra": "2025-03-01"
+  },
+  "schedules": {
+    "generic": {
+      "label": "Genèric (div. 20h + caps de setmana i festius)",
+      "hours": {
+        "fri": { "from": "20:00", "to": "23:59" },
+        "sat": { "from": "00:00", "to": "23:59" },
+        "sun": { "from": "00:00", "to": "23:59" },
+        "holiday": { "from": "00:00", "to": "23:59" }
+      }
+    },
+    "diumenges_festius": {
+      "label": "Diumenges i festius",
+      "hours": {
+        "sun": { "from": "00:00", "to": "23:59" },
+        "holiday": { "from": "00:00", "to": "23:59" }
+      }
+    }
   }
 }

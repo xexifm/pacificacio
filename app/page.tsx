@@ -3,7 +3,8 @@
 import { useState, useMemo, useRef, useCallback, useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { type TrafficData, type CameraSettings } from '@/lib/types';
-import { getTrafficData, getCameraSettings, getBollardSettings } from '@/lib/dataStore';
+import { getTrafficData, getCameraSettings, getBollardSettings, getSchedules } from '@/lib/dataStore';
+import type { SchedulesMap } from '@/lib/schedule';
 import { asset } from '@/lib/paths';
 import { NEIGHBOURHOODS } from '@/lib/neighbourhoods';
 import {
@@ -23,7 +24,7 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/component
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell, ReferenceLine } from 'recharts';
 import { Calendar } from '@/components/ui/calendar';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
-import { CalendarIcon, BarChart3, ChevronDown, ChevronRight, Download, Loader2, AlertTriangle, FileText } from 'lucide-react';
+import { CalendarIcon, BarChart3, ChevronDown, Download, Loader2, AlertTriangle, FileText } from 'lucide-react';
 import { Tooltip as UITooltip, TooltipContent as UITooltipContent, TooltipTrigger as UITooltipTrigger } from '@/components/ui/tooltip';
 import { format, startOfYear, endOfYear } from 'date-fns';
 import { ca } from 'date-fns/locale';
@@ -72,7 +73,6 @@ export default function Analytics() {
   const [selectedVehicleTypes, setSelectedVehicleTypes] = useState<string[]>([]);
   const [selectedCameras, setSelectedCameras] = useState<string[]>([]);
   const [selectedDeviceType, setSelectedDeviceType] = useState<string>('all');
-  const [vehicleBreakdownOpen, setVehicleBreakdownOpen] = useState<Record<string, boolean>>({});
   const [isGeneratingPDF, setIsGeneratingPDF] = useState(false);
   const [isGeneratingExec, setIsGeneratingExec] = useState(false);
   const [chartGranularity, setChartGranularity] = useState<Granularity>('month');
@@ -114,6 +114,11 @@ export default function Analytics() {
   const { data: cameraSettings = [] } = useQuery<CameraSettings[]>({
     queryKey: ['camera-settings'],
     queryFn: getCameraSettings,
+  });
+
+  const { data: schedules = {} } = useQuery<SchedulesMap>({
+    queryKey: ['schedules'],
+    queryFn: getSchedules,
   });
 
   const { data: bollardSettings } = useQuery<BollardSettings>({
@@ -304,7 +309,9 @@ export default function Analytics() {
     return markers;
   }, [displayChartData, bollardSettings, chartGranularity]);
 
-  const neighbourhoodAverages = useMemo(() => {
+  // Computed on demand (only when the detailed report is generated) so this heavy
+  // aggregation stays off the dashboard's render path.
+  const computeNeighbourhoodAverages = useCallback(() => {
     // When multiple cameras are selected, we calculate per-camera averages first,
     // then sum them. This ensures CT10 avg + CT11 avg = combined avg.
     
@@ -495,24 +502,6 @@ export default function Analytics() {
     return filteredData.reduce((sum, row) => sum + row.valor, 0);
   }, [filteredData]);
 
-  const bollardReduction = useMemo(() => {
-    const calcReduction = (downAvg: number, upAvg: number) => {
-      if (downAvg === 0) return null;
-      return Math.round((upAvg / downAvg) * 100 * 100) / 100;
-    };
-    
-    return {
-      'Pedró': calcReduction(
-        neighbourhoodAverages['Pedró'].holidayDownAvg,
-        neighbourhoodAverages['Pedró'].holidayUpAvg
-      ),
-      'Gavarra': calcReduction(
-        neighbourhoodAverages['Gavarra'].holidayDownAvg,
-        neighbourhoodAverages['Gavarra'].holidayUpAvg
-      ),
-    };
-  }, [neighbourhoodAverages]);
-
   const availableCameras = useMemo(() => {
     const cameras = new Set<string>();
     data.forEach(row => cameras.add(row.camera));
@@ -607,6 +596,7 @@ export default function Analytics() {
         trafficData,
         cameraSettings,
         bollardSettings,
+        schedules,
         attribution: ATTRIBUTION,
         escutSrc: cornellaLogo,
       });
@@ -615,7 +605,7 @@ export default function Analytics() {
     } finally {
       setIsGeneratingExec(false);
     }
-  }, [trafficData, cameraSettings, bollardSettings]);
+  }, [trafficData, cameraSettings, bollardSettings, schedules]);
 
   const generatePDF = useCallback(async () => {
     if (filteredData.length === 0) return;
@@ -623,6 +613,14 @@ export default function Analytics() {
     try {
       // Load the report generator (and its heavy jsPDF/html2canvas deps) on demand.
       const { generateAnalyticsReport } = await import('@/lib/pdfReport');
+      // Heavy per-neighbourhood aggregation is computed here, on demand.
+      const neighbourhoodAverages = computeNeighbourhoodAverages();
+      const calcReduction = (downAvg: number, upAvg: number) =>
+        downAvg === 0 ? null : Math.round((upAvg / downAvg) * 100 * 100) / 100;
+      const bollardReduction = {
+        'Pedró': calcReduction(neighbourhoodAverages['Pedró'].holidayDownAvg, neighbourhoodAverages['Pedró'].holidayUpAvg),
+        'Gavarra': calcReduction(neighbourhoodAverages['Gavarra'].holidayDownAvg, neighbourhoodAverages['Gavarra'].holidayUpAvg),
+      };
       await generateAnalyticsReport({
         filteredData,
         chartData,
@@ -648,7 +646,7 @@ export default function Analytics() {
     } finally {
       setIsGeneratingPDF(false);
     }
-  }, [filteredData, chartData, totalVehicles, neighbourhoodAverages, bollardReduction, bollardSettings, selectedNeighbourhood, dateRange, selectedVehicleTypes, selectedCameras, selectedDeviceType, availableCameras, cameraToNeighbourhood]);
+  }, [filteredData, chartData, totalVehicles, computeNeighbourhoodAverages, bollardSettings, selectedNeighbourhood, dateRange, selectedVehicleTypes, selectedCameras, selectedDeviceType, availableCameras, cameraToNeighbourhood]);
 
 
   if (isLoading) {
@@ -726,6 +724,7 @@ export default function Analytics() {
             trafficData={trafficData}
             cameraSettings={cameraSettings}
             bollardSettings={bollardSettings}
+            schedules={schedules}
           />
           <Card className="p-4">
             <h3 className="text-sm font-semibold text-foreground mb-3">Filtres</h3>
@@ -969,95 +968,6 @@ export default function Analytics() {
             </div>
           </Card>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {(['Pedró', 'Gavarra'] as const).map(neighbourhood => {
-              const stats = neighbourhoodAverages[neighbourhood];
-              const reduction = bollardReduction[neighbourhood];
-              const bollardDate = neighbourhood === 'Pedró' 
-                ? bollardSettings?.bollardStartDatePedro 
-                : bollardSettings?.bollardStartDateGavarra;
-              const isBreakdownOpen = vehicleBreakdownOpen[neighbourhood] || false;
-              
-              const VehicleBreakdownGrid = ({ breakdown, color }: { breakdown: Record<string, number>; color: string }) => (
-                <div className="grid grid-cols-3 gap-x-2 gap-y-0.5 text-[10px] mt-1">
-                  {Object.entries(breakdown).sort().map(([vehicle, avg]) => (
-                    <div key={vehicle} className="flex justify-between gap-1">
-                      <span className="text-muted-foreground truncate">{vehicle}:</span>
-                      <span className="font-medium" style={{ color }}>{avg.toLocaleString()}</span>
-                    </div>
-                  ))}
-                </div>
-              );
-              
-              return (
-                <Card key={neighbourhood} className="p-3 flex flex-col">
-                  <div className="flex items-center justify-between mb-1">
-                    <h3 className="text-base font-semibold text-foreground">
-                      {neighbourhood}
-                    </h3>
-                    {bollardDate && (
-                      <span className="text-[10px] text-muted-foreground">
-                        Pilones: {bollardDate}
-                      </span>
-                    )}
-                  </div>
-                  
-                  <div className="space-y-1.5 flex-1">
-                    <div className="p-2 bg-blue-50 dark:bg-blue-950/30 rounded border-l-2 border-blue-500">
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="text-xs text-muted-foreground">Laborables ({stats.workingDays}d)</span>
-                        <span className="text-sm font-bold text-foreground" data-testid={`avg-${neighbourhood.toLowerCase()}-working`}>
-                          {stats.workingAvg.toLocaleString()} v/d
-                        </span>
-                      </div>
-                      {isBreakdownOpen && <VehicleBreakdownGrid breakdown={stats.workingByVehicle} color={DAY_CATEGORY_COLORS.working} />}
-                    </div>
-                    
-                    <div className="p-2 bg-green-50 dark:bg-green-950/30 rounded border-l-2 border-green-500">
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="text-xs text-muted-foreground">Festius baixats ({stats.holidayDownDays}d)</span>
-                        <span className="text-sm font-bold text-foreground" data-testid={`avg-${neighbourhood.toLowerCase()}-holiday-down`}>
-                          {stats.holidayDownAvg.toLocaleString()} v/d
-                        </span>
-                      </div>
-                      {isBreakdownOpen && <VehicleBreakdownGrid breakdown={stats.holidayDownByVehicle} color={DAY_CATEGORY_COLORS.holiday_down} />}
-                    </div>
-                    
-                    <div className="p-2 bg-red-50 dark:bg-red-950/30 rounded border-l-2 border-red-500">
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="text-xs text-muted-foreground">Festius aixecats ({stats.holidayUpDays}d)</span>
-                        <span className="text-sm font-bold text-foreground" data-testid={`avg-${neighbourhood.toLowerCase()}-holiday-up`}>
-                          {stats.holidayUpAvg.toLocaleString()} v/d
-                        </span>
-                      </div>
-                      {isBreakdownOpen && <VehicleBreakdownGrid breakdown={stats.holidayUpByVehicle} color={DAY_CATEGORY_COLORS.holiday_up} />}
-                    </div>
-                    
-                    <div className="p-2 bg-primary/10 border border-primary/20 rounded flex items-center justify-between gap-2">
-                      <span className="text-xs text-muted-foreground">Reducció pilones</span>
-                      <span className="text-sm font-bold text-primary" data-testid={`reduction-${neighbourhood.toLowerCase()}`}>
-                        {reduction !== null ? `${reduction}%` : 'N/A'}
-                      </span>
-                    </div>
-                  </div>
-                  
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="mt-2 w-full h-6 text-xs"
-                    onClick={() => setVehicleBreakdownOpen(prev => ({ ...prev, [neighbourhood]: !prev[neighbourhood] }))}
-                    data-testid={`toggle-breakdown-${neighbourhood.toLowerCase()}`}
-                  >
-                    {isBreakdownOpen ? (
-                      <><ChevronDown className="w-3 h-3 mr-1" />Amagar detall vehicles</>
-                    ) : (
-                      <><ChevronRight className="w-3 h-3 mr-1" />Mostrar detall vehicles</>
-                    )}
-                  </Button>
-                </Card>
-              );
-            })}
-          </div>
 
           <Card className="p-4">
             <div className="flex items-center justify-between mb-3 flex-wrap gap-2">

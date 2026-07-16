@@ -21,6 +21,8 @@ export interface CameraSettings {
   cameraType: string;
   /** Whether this device's counts are trustworthy enough for headline figures. */
   reliable: boolean;
+  /** Named pilona schedule this camera follows (only meaningful for Pilona type). */
+  scheduleId: string;
 }
 
 export interface BollardSettings {
