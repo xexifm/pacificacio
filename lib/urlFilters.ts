@@ -9,6 +9,7 @@ export interface DashboardFilters {
   deviceType: string; // 'all' | 'Pilona' | 'Càmera'
   cameras: string[];
   vehicles: string[];
+  dayCategories: string[]; // subset of 'working' | 'holiday_down' | 'holiday_up' ([] = all)
   dateRange: DateRange | undefined;
 }
 
@@ -34,6 +35,7 @@ export function buildFilterQuery(f: DashboardFilters): string {
   if (f.deviceType && f.deviceType !== "all") params.set("dispositiu", f.deviceType);
   if (f.cameras.length) params.set("cameres", f.cameras.join(","));
   if (f.vehicles.length) params.set("vehicles", f.vehicles.join(","));
+  if (f.dayCategories.length) params.set("dies", f.dayCategories.join(","));
   if (f.dateRange?.from) params.set("desde", toKey(f.dateRange.from));
   if (f.dateRange?.to) params.set("fins", toKey(f.dateRange.to));
   const qs = params.toString();
@@ -55,6 +57,9 @@ export function parseFilterQuery(search: string): Partial<DashboardFilters> {
 
   const vehicles = params.get("vehicles");
   if (vehicles) out.vehicles = vehicles.split(",").filter(Boolean);
+
+  const dies = params.get("dies");
+  if (dies) out.dayCategories = dies.split(",").filter(Boolean);
 
   const from = params.get("desde");
   const to = params.get("fins");

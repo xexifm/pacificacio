@@ -26,7 +26,7 @@ import { Calendar } from '@/components/ui/calendar';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { CalendarIcon, BarChart3, ChevronDown, Download, Loader2, AlertTriangle, FileText } from 'lucide-react';
 import { Tooltip as UITooltip, TooltipContent as UITooltipContent, TooltipTrigger as UITooltipTrigger } from '@/components/ui/tooltip';
-import { format, startOfYear, endOfYear } from 'date-fns';
+import { format, startOfYear, endOfYear, subMonths, subYears, addDays } from 'date-fns';
 import { ca } from 'date-fns/locale';
 import type { DateRange } from 'react-day-picker';
 import DataCoverageTable from '@/components/DataCoverageTable';
@@ -40,6 +40,14 @@ const bollardImage = asset('/assets/bollard.jpg');
 
 type Granularity = 'day' | 'week' | 'month';
 const AGG_FILL = '#3b82f6';
+
+// Day-type filter options (ordered), with a short and long label. The colours
+// mirror the chart's DAY_CATEGORY_COLORS so the filter reads like the legend.
+const DAY_CATEGORY_OPTIONS: { value: DayCategory; label: string; hint: string }[] = [
+  { value: 'working', label: 'Laborables', hint: 'dies feiners' },
+  { value: 'holiday_up', label: 'Festius amb restricció', hint: 'pilona amunt / càmera activa' },
+  { value: 'holiday_down', label: 'Festius sense restricció', hint: 'abans de l’activació' },
+];
 
 function mondayOf(dateISO: string): string {
   const d = new Date(`${dateISO}T12:00:00.000Z`);
@@ -73,6 +81,7 @@ export default function Analytics() {
   const [selectedVehicleTypes, setSelectedVehicleTypes] = useState<string[]>([]);
   const [selectedCameras, setSelectedCameras] = useState<string[]>([]);
   const [selectedDeviceType, setSelectedDeviceType] = useState<string>('all');
+  const [selectedDayCategories, setSelectedDayCategories] = useState<DayCategory[]>([]);
   const [isGeneratingPDF, setIsGeneratingPDF] = useState(false);
   const [isGeneratingExec, setIsGeneratingExec] = useState(false);
   const [chartGranularity, setChartGranularity] = useState<Granularity>('month');
@@ -89,6 +98,10 @@ export default function Analytics() {
     if (parsed.deviceType) setSelectedDeviceType(parsed.deviceType);
     if (parsed.cameras) setSelectedCameras(parsed.cameras);
     if (parsed.vehicles) setSelectedVehicleTypes(parsed.vehicles);
+    if (parsed.dayCategories) {
+      const valid = new Set<DayCategory>(['working', 'holiday_down', 'holiday_up']);
+      setSelectedDayCategories(parsed.dayCategories.filter((c): c is DayCategory => valid.has(c as DayCategory)));
+    }
     if (parsed.dateRange) setDateRange(parsed.dateRange);
     setFiltersHydrated(true);
   }, []);
@@ -101,10 +114,11 @@ export default function Analytics() {
       deviceType: selectedDeviceType,
       cameras: selectedCameras,
       vehicles: selectedVehicleTypes,
+      dayCategories: selectedDayCategories,
       dateRange,
     });
     window.history.replaceState(null, '', `${window.location.pathname}${query}`);
-  }, [filtersHydrated, selectedNeighbourhood, selectedDeviceType, selectedCameras, selectedVehicleTypes, dateRange]);
+  }, [filtersHydrated, selectedNeighbourhood, selectedDeviceType, selectedCameras, selectedVehicleTypes, selectedDayCategories, dateRange]);
 
   const { data: trafficData = [], isLoading } = useQuery<TrafficData[]>({
     queryKey: ['traffic-data'],
@@ -197,6 +211,14 @@ export default function Analytics() {
         }
       }
 
+      if (selectedDayCategories.length > 0) {
+        if (!row.dateTime) return false;
+        const category = getDayCategory(row.dateTime, row.neighbourhood, bollardSettings);
+        if (!selectedDayCategories.includes(category)) {
+          return false;
+        }
+      }
+
       if (dateRange?.from || dateRange?.to) {
         // Use datahora for date comparison — it's always "YYYY-MM-DD HH:MM" so slice(0,10) is safe
         const rowDateKey = row.datahora.slice(0, 10);
@@ -218,7 +240,7 @@ export default function Analytics() {
     });
     
     return result;
-  }, [data, selectedNeighbourhood, dateRange, selectedVehicleTypes, selectedCameras, selectedDeviceType, cameraToType]);
+  }, [data, selectedNeighbourhood, dateRange, selectedVehicleTypes, selectedCameras, selectedDeviceType, selectedDayCategories, bollardSettings, cameraToType]);
 
   const chartData = useMemo(() => {
     const grouped = new Map<string, { total: number; dateObj: Date; neighbourhoods: Set<string> }>();
@@ -518,10 +540,27 @@ export default function Analytics() {
     return Array.from(years).sort();
   }, [data]);
 
-  const yearQuickButtons = useMemo(() => {
-    const currentYear = new Date().getFullYear();
-    return [currentYear - 3, currentYear - 2, currentYear - 1, currentYear];
-  }, []);
+  // Only offer year shortcuts for years that actually have data.
+  const yearQuickButtons = useMemo(() => availableYears.map(y => parseInt(y)), [availableYears]);
+
+  // The real min/max dates present in the dataset. Relative presets ("last month",
+  // "last year") anchor on the LAST day with data, not on today — the dataset can
+  // end well before the current date, so anchoring on today would select empty ranges.
+  const dataDateRange = useMemo(() => {
+    if (data.length === 0) return null;
+    let min = '9999-99-99';
+    let max = '0000-00-00';
+    for (const row of data) {
+      const key = row.datahora.slice(0, 10);
+      if (key < min) min = key;
+      if (key > max) max = key;
+    }
+    const parse = (k: string) => {
+      const [y, m, d] = k.split('-').map(Number);
+      return new Date(y, m - 1, d);
+    };
+    return { min: parse(min), max: parse(max) };
+  }, [data]);
 
   const isPendingRangeFullYear = (year: number): boolean => {
     if (!pendingRange?.from || !pendingRange?.to) return false;
@@ -537,6 +576,24 @@ export default function Analytics() {
     setPendingRange({ from, to });
   };
 
+  // Relative presets, anchored on the last day with data (see dataDateRange).
+  const rangePresets = useMemo(() => {
+    if (!dataDateRange) return [];
+    const { min, max } = dataDateRange;
+    const clampFrom = (d: Date) => (d < min ? min : d);
+    return [
+      { key: '30d', label: 'Últim mes', from: clampFrom(addDays(subMonths(max, 1), 1)), to: max },
+      { key: '3m', label: 'Últims 3 mesos', from: clampFrom(addDays(subMonths(max, 3), 1)), to: max },
+      { key: '12m', label: 'Últim any', from: clampFrom(addDays(subYears(max, 1), 1)), to: max },
+      { key: 'all', label: 'Tot el període', from: min, to: max },
+    ];
+  }, [dataDateRange]);
+
+  const isPendingRangeEqual = (from: Date, to: Date): boolean =>
+    !!pendingRange?.from && !!pendingRange?.to &&
+    pendingRange.from.getTime() === from.getTime() &&
+    pendingRange.to.getTime() === to.getTime();
+
   const formatPendingRangeHeader = (): string => {
     if (!pendingRange?.from) return 'Totes les dates';
     const fromStr = format(pendingRange.from, "d MMM yyyy", { locale: ca });
@@ -551,6 +608,7 @@ export default function Analytics() {
     setSelectedVehicleTypes([]);
     setSelectedCameras([]);
     setSelectedDeviceType('all');
+    setSelectedDayCategories([]);
     setPendingRange(undefined);
     setCalendarOpen(false);
   };
@@ -580,10 +638,18 @@ export default function Analytics() {
   };
 
   const handleToggleCamera = (camera: string) => {
-    setSelectedCameras(prev => 
+    setSelectedCameras(prev =>
       prev.includes(camera)
         ? prev.filter(c => c !== camera)
         : [...prev, camera]
+    );
+  };
+
+  const handleToggleDayCategory = (category: DayCategory) => {
+    setSelectedDayCategories(prev =>
+      prev.includes(category)
+        ? prev.filter(c => c !== category)
+        : [...prev, category]
     );
   };
 
@@ -729,7 +795,7 @@ export default function Analytics() {
           <Card className="p-4">
             <h3 className="text-sm font-semibold text-foreground mb-3">Filtres</h3>
             
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-7 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-8 gap-4">
               <div className="space-y-2">
                 <label className="text-sm font-medium text-foreground">Barri</label>
                 <Select value={selectedNeighbourhood} onValueChange={setSelectedNeighbourhood}>
@@ -870,6 +936,56 @@ export default function Analytics() {
                 </Popover>
               </div>
 
+              <div className="space-y-2">
+                <label className="text-sm font-medium text-foreground">Tipus de dia</label>
+                <Popover>
+                  <PopoverTrigger asChild>
+                    <Button
+                      variant="outline"
+                      className="w-full justify-start text-left font-normal"
+                      data-testid="button-day-categories"
+                    >
+                      {selectedDayCategories.length === 0 ? (
+                        <span className="text-muted-foreground">Tots els dies</span>
+                      ) : selectedDayCategories.length === 1 ? (
+                        DAY_CATEGORY_OPTIONS.find(o => o.value === selectedDayCategories[0])?.label
+                      ) : (
+                        `${selectedDayCategories.length} seleccionats`
+                      )}
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent className="w-[280px] p-4" align="start">
+                    <div className="space-y-3">
+                      <div className="font-medium text-sm">Selecciona tipus de dia</div>
+                      {DAY_CATEGORY_OPTIONS.map(option => (
+                        <div key={option.value} className="flex items-start space-x-2">
+                          <Checkbox
+                            id={`day-${option.value}`}
+                            checked={selectedDayCategories.includes(option.value)}
+                            onCheckedChange={() => handleToggleDayCategory(option.value)}
+                            className="mt-0.5"
+                            data-testid={`checkbox-day-${option.value}`}
+                          />
+                          <label
+                            htmlFor={`day-${option.value}`}
+                            className="flex flex-col cursor-pointer leading-tight"
+                          >
+                            <span className="flex items-center gap-1.5 text-sm font-medium">
+                              <span
+                                className="inline-block w-2.5 h-2.5 rounded-sm flex-shrink-0"
+                                style={{ backgroundColor: DAY_CATEGORY_COLORS[option.value] }}
+                              />
+                              {option.label}
+                            </span>
+                            <span className="text-xs text-muted-foreground">{option.hint}</span>
+                          </label>
+                        </div>
+                      ))}
+                    </div>
+                  </PopoverContent>
+                </Popover>
+              </div>
+
               <div className="space-y-1.5 xl:col-span-2">
                 <label className="text-sm font-medium text-foreground">Data</label>
                 <Popover open={calendarOpen} onOpenChange={handleCalendarOpenChange}>
@@ -901,6 +1017,29 @@ export default function Analytics() {
                       </p>
                     </div>
 
+                    {rangePresets.length > 0 && (
+                      <div className="border-b px-3 py-2 grid grid-cols-2 gap-1.5">
+                        {rangePresets.map(preset => {
+                          const isActive = isPendingRangeEqual(preset.from, preset.to);
+                          return (
+                            <button
+                              key={preset.key}
+                              type="button"
+                              onClick={() => setPendingRange({ from: preset.from, to: preset.to })}
+                              className={`text-sm font-medium py-1 rounded-md border transition-colors ${
+                                isActive
+                                  ? 'bg-primary text-primary-foreground border-primary'
+                                  : 'border-border text-muted-foreground hover:text-foreground hover:border-foreground/40'
+                              }`}
+                              data-testid={`button-preset-${preset.key}`}
+                            >
+                              {preset.label}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
+
                     <div className="border-b px-3 py-2 flex gap-1.5">
                       {yearQuickButtons.map(year => {
                         const isActive = isPendingRangeFullYear(year);
@@ -926,6 +1065,7 @@ export default function Analytics() {
                       mode="range"
                       selected={pendingRange}
                       onSelect={setPendingRange}
+                      defaultMonth={pendingRange?.from ?? (dataDateRange ? subMonths(dataDateRange.max, 1) : undefined)}
                       numberOfMonths={2}
                       captionLayout="dropdown"
                       fromYear={availableYears.length > 0 ? parseInt(availableYears[0]) : 2023}
