@@ -65,6 +65,9 @@ type RawSettings = z.infer<typeof rawSettingsSchema>;
 // Memoised fetches so multiple useQuery hooks share one network round-trip.
 let trafficPromise: Promise<TrafficData[]> | null = null;
 let settingsPromise: Promise<RawSettings> | null = null;
+// The exact text of the published settings.json, kept so a local override can be
+// invalidated when the published file changes (see the override logic below).
+let publishedSettingsText: string | null = null;
 
 async function fetchJson(path: string): Promise<unknown> {
   const res = await fetch(asset(path), { cache: "force-cache" });
@@ -75,44 +78,95 @@ async function fetchJson(path: string): Promise<unknown> {
 // Locally-saved settings override (from the Configuració "Guardar canvis" button).
 // Lets the admin apply changes on their device without a server; the committed
 // settings.json remains the public default until they download + commit it.
+//
+// IMPORTANT: the override records the published settings.json it was saved against
+// (its `baseline`). When the published file later changes — e.g. the admin commits
+// a new settings.json — the stored baseline no longer matches, so the override is
+// treated as stale and discarded. This means the published file ALWAYS wins after
+// a real change, instead of an old local copy silently shadowing it forever.
 const SETTINGS_OVERRIDE_KEY = "pacificacio-settings-override";
 
-function readOverride(): unknown | null {
+interface StoredOverride {
+  baseline: string; // published settings.json text at save time
+  data: unknown; // the edited settings
+}
+
+function readOverride(): StoredOverride | null {
   if (typeof window === "undefined") return null;
   try {
     const s = window.localStorage.getItem(SETTINGS_OVERRIDE_KEY);
-    return s ? JSON.parse(s) : null;
+    if (!s) return null;
+    const parsed = JSON.parse(s);
+    // Only the new {baseline, data} shape is honoured; legacy overrides (raw
+    // settings with no baseline) are ignored so they can't shadow the published file.
+    if (parsed && typeof parsed === "object" && "baseline" in parsed && "data" in parsed) {
+      return parsed as StoredOverride;
+    }
+    return null;
   } catch {
     return null;
   }
 }
 
+function removeOverride(): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.removeItem(SETTINGS_OVERRIDE_KEY);
+  } catch {
+    /* ignore */
+  }
+}
+
 export function saveSettingsOverride(raw: unknown): void {
   if (typeof window === "undefined") return;
-  window.localStorage.setItem(SETTINGS_OVERRIDE_KEY, JSON.stringify(raw));
+  // Requires the published file to have been fetched first (the config page always
+  // loads settings before the user can save, so this is populated).
+  const baseline = publishedSettingsText ?? "";
+  window.localStorage.setItem(SETTINGS_OVERRIDE_KEY, JSON.stringify({ baseline, data: raw }));
   settingsPromise = null; // force re-read on next query
 }
 
 export function clearSettingsOverride(): void {
-  if (typeof window === "undefined") return;
-  window.localStorage.removeItem(SETTINGS_OVERRIDE_KEY);
+  removeOverride();
   settingsPromise = null;
 }
 
+/** Whether an override is active AND still matches the current published file. */
 export function hasSettingsOverride(): boolean {
-  return readOverride() !== null;
+  const o = readOverride();
+  return o !== null && o.baseline === publishedSettingsText;
+}
+
+// Always fetches the published settings.json (never the override), caching its raw
+// text for baseline comparison.
+async function fetchPublishedSettings(): Promise<RawSettings> {
+  const res = await fetch(asset("/data/settings.json"), { cache: "no-cache" });
+  if (!res.ok) throw new Error(`No s'ha pogut carregar settings.json: ${res.status}`);
+  const text = await res.text();
+  publishedSettingsText = text;
+  const parsed = rawSettingsSchema.safeParse(JSON.parse(text));
+  if (!parsed.success) {
+    throw new Error(`settings.json invàlid: ${parsed.error.message}`);
+  }
+  return parsed.data;
 }
 
 async function loadSettings(): Promise<RawSettings> {
   if (!settingsPromise) {
     settingsPromise = (async () => {
+      const published = await fetchPublishedSettings();
       const override = readOverride();
-      const json = override ?? (await fetchJson("/data/settings.json"));
-      const parsed = rawSettingsSchema.safeParse(json);
-      if (!parsed.success) {
-        throw new Error(`settings.json invàlid: ${parsed.error.message}`);
+      // Use the override only when it was saved against the CURRENT published file.
+      if (override && override.baseline === publishedSettingsText) {
+        const parsed = rawSettingsSchema.safeParse(override.data);
+        if (parsed.success) return parsed.data;
       }
-      return parsed.data;
+      // No usable override → published file wins. Purge any stale/legacy entry so it
+      // can never resurface (readOverride ignores legacy shapes, but don't leave junk).
+      if (typeof window !== "undefined" && window.localStorage.getItem(SETTINGS_OVERRIDE_KEY)) {
+        removeOverride();
+      }
+      return published;
     })();
   }
   return settingsPromise;

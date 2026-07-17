@@ -9,7 +9,7 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { Download, Info, Lock, Save, Check } from "lucide-react";
+import { Download, Info, Lock, Save, Check, AlertTriangle } from "lucide-react";
 import {
   getCameraSettings, getBollardSettings, getSchedules,
   saveSettingsOverride, clearSettingsOverride, hasSettingsOverride,
@@ -126,7 +126,9 @@ function ConfigEditor() {
       setSchedules(JSON.parse(JSON.stringify(loadedSchedules)));
     }
   }, [loadedSchedules]);
-  useEffect(() => { setHasOverride(hasSettingsOverride()); }, []);
+  // Re-check once the published settings have actually loaded (the override is only
+  // considered active when it matches the current published file).
+  useEffect(() => { setHasOverride(hasSettingsOverride()); }, [cameraSettings, loadedSchedules]);
 
   const sortedCameras = useMemo(
     () => [...cameras].sort((a, b) => parseInt(a.cameraId.replace(/\D/g, "")) - parseInt(b.cameraId.replace(/\D/g, ""))),
@@ -201,6 +203,27 @@ function ConfigEditor() {
             descarregat i fes-hi commit.
           </AlertDescription>
         </Alert>
+
+        {hasOverride && (
+          <Alert className="mb-6 border-amber-500/50 text-amber-900 dark:text-amber-200 [&>svg]:text-amber-500" data-testid="override-banner">
+            <AlertTriangle className="h-4 w-4" />
+            <AlertDescription className="text-sm flex flex-wrap items-center gap-2">
+              <span>
+                Estàs veient <strong>canvis locals guardats en aquest navegador</strong>, no els valors
+                publicats al repositori. Descarta'ls per tornar a veure la configuració pública.
+              </span>
+              <Button
+                onClick={handleReset}
+                size="sm"
+                variant="outline"
+                className="h-7 border-amber-500/60"
+                data-testid="button-discard-override"
+              >
+                Descarta els canvis locals
+              </Button>
+            </AlertDescription>
+          </Alert>
+        )}
 
         {isLoading ? (
           <div className="text-center py-10 text-muted-foreground">Carregant configuració...</div>
@@ -328,12 +351,6 @@ function ConfigEditor() {
                 </Button>
               )}
             </div>
-            {hasOverride && (
-              <p className="text-xs text-muted-foreground" data-testid="override-active-note">
-                Estàs veient canvis guardats localment en aquest navegador. La versió pública només canvia
-                quan descarregues el fitxer i el commit-eges al repositori.
-              </p>
-            )}
           </div>
         )}
       </div>
